@@ -155,16 +155,28 @@ Return ONLY the email body text (no subject line).`;
   return `Hello${contact ? ' ' + contact : ''},\n\nThank you so much for your referral — we are truly grateful you thought of MDconcierge. We have received it for ${clientName} (reference ${refId}), and our coordination team is already getting to work.${ask}\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
 }
 
-async function sendReply(to, origSubject, text, inReplyTo) {
+function escEmail(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function emailHtml(bodyText, buttons){
+  const para='<p style="margin:0 0 14px;">'+escEmail(bodyText).replace(/\n\n+/g,'</p><p style="margin:0 0 14px;">').replace(/\n/g,'<br>')+'</p>';
+  const btns=(buttons&&buttons.length)?('<div style="margin-top:6px;">'+buttons.map(b=>`<a href="${b.href}" style="display:inline-block;padding:11px 20px;margin:6px 10px 6px 0;background:${b.color};color:${b.text};text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;">${escEmail(b.label)}</a>`).join('')+'</div>'):'';
+  return `<!doctype html><html><body style="margin:0;background:#f4f5f7;font-family:'Segoe UI',Arial,sans-serif;">`
+    +`<div style="max-width:560px;margin:0 auto;padding:22px;">`
+    +`<div style="background:#0b0f14;border-radius:12px 12px 0 0;padding:18px 24px;"><span style="font-size:20px;font-weight:800;color:#ffffff;">MD<span style="color:#c8922a;">concierge</span></span><div style="color:#8e97a3;font-size:12px;margin-top:2px;">Medical-Legal Coordination</div></div>`
+    +`<div style="background:#ffffff;border:1px solid #e3e6ea;border-top:none;border-radius:0 0 12px 12px;padding:22px 24px;color:#1a2230;font-size:14px;line-height:1.6;">${para}${btns}</div>`
+    +`<div style="text-align:center;color:#9aa3af;font-size:11px;padding:14px;">MDconcierge &middot; referrals@mdconcierge.net</div>`
+    +`</div></body></html>`;
+}
+function mailtoBtn(label, subject, body, color, text){return {label,href:`mailto:referrals@mdconcierge.net?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,color:color||'#c8922a',text:text||'#1a1305'};}
+async function sendReply(to, origSubject, text, html, inReplyTo) {
   const subject = /^re:/i.test(origSubject || '') ? origSubject : `Re: ${origSubject || 'Your referral'}`;
   await transporter.sendMail({
     from: `MDconcierge Coordination <${ZOHO_USER}>`,
-    to, subject, text,
+    to, subject, text, html,
     headers: Object.assign({ 'X-MDC-Auto': 'ack' }, inReplyTo ? { 'In-Reply-To': inReplyTo, 'References': inReplyTo } : {}),
   });
 }
-async function sendMail(to, subject, text) {
-  await transporter.sendMail({ from: `MDconcierge Coordination <${ZOHO_USER}>`, to, subject, text, headers: { 'X-MDC-Auto': 'notify' } });
+async function sendMail(to, subject, text, html) {
+  await transporter.sendMail({ from: `MDconcierge Coordination <${ZOHO_USER}>`, to, subject, text, html, headers: { 'X-MDC-Auto': 'notify' } });
 }
 
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
@@ -220,7 +232,13 @@ async function notifyRoutedProviders() {
       }
       const text = await draftProviderEmail(cs, prov, recipients);
       const to = recipients.map(r => r.email).join(', ');
-      await sendMail(to, `New patient referral — ${[cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id}`, text);
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      const btns = [
+        mailtoBtn('✅ Accept referral', `ACCEPT ${cs.case_id} — ${patient}`, `We can accept ${patient} (${cs.case_id}). Please send the full case details and we'll coordinate scheduling.`, '#2ecc8a', '#06351f'),
+        mailtoBtn('Decline', `DECLINE ${cs.case_id} — ${patient}`, `Unfortunately we're unable to take ${patient} (${cs.case_id}) at this time.`, '#e0556b', '#ffffff'),
+        mailtoBtn('Reply to coordinate', `RE ${cs.case_id} — ${patient}`, `Hello, regarding ${patient} (${cs.case_id}):\n\n`),
+      ];
+      await sendMail(to, `New patient referral — ${patient}`, text, emailHtml(text, btns));
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, followup_count: 0, next_checkin: addBusinessDays(2) });
       console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
@@ -256,7 +274,12 @@ async function followUpRouted() {
       const count = (cs.followup_count || 0) + 1;
       if (recipients.length) {
         const text = await draftFollowUp(cs, prov, count);
-        await sendMail(recipients.map(r => r.email).join(', '), `Following up — ${[cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id}`, text);
+        const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+        const btns = [
+          mailtoBtn('Update us on scheduling', `UPDATE ${cs.case_id} — ${patient}`, `Hello, an update on ${patient} (${cs.case_id}):\n\n`),
+          mailtoBtn('✅ Accept referral', `ACCEPT ${cs.case_id} — ${patient}`, `We can accept ${patient} (${cs.case_id}).`, '#2ecc8a', '#06351f'),
+        ];
+        await sendMail(recipients.map(r => r.email).join(', '), `Following up — ${patient}`, text, emailHtml(text, btns));
       }
       if (count >= 3) {
         await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: null, notes: (cs.notes || '') + ' | FOLLOW-UP: 3 reminders sent, no scheduling confirmed — please review' });
@@ -312,7 +335,9 @@ async function main() {
         if (fromAddr) {
           try {
             const replyText = await draftReply(extracted, payload, fromAddr);
-            await sendReply(fromAddr, subject, replyText, msg.envelope?.messageId);
+            const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
+            const ackHtml = emailHtml(replyText, [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)]);
+            await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
             console.log(`  ↳ acknowledged ${fromAddr}`);
           } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
         }
