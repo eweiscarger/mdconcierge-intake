@@ -1,0 +1,12 @@
+{
+  "name": "mdconcierge-intake",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Auto-ingest attorney referral emails from referrals@mdconcierge.net into the MDconcierge Supabase cases table.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "imapflow": "^1.0.187",
+    "mailparser": "^3.7.2"
+  }
+}
