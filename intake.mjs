@@ -169,6 +169,7 @@ async function sendMail(to, subject, text) {
 
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
 const SVC = process.env.SUPABASE_SERVICE_KEY;
+function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: { apikey: SVC, Authorization: `Bearer ${SVC}` } });
   if (!r.ok) throw new Error(`GET ${path} ${r.status}: ${await r.text()}`);
@@ -220,9 +221,51 @@ async function notifyRoutedProviders() {
       const text = await draftProviderEmail(cs, prov, recipients);
       const to = recipients.map(r => r.email).join(', ');
       await sendMail(to, `New patient referral — ${[cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id}`, text);
-      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true });
+      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, followup_count: 0, next_checkin: addBusinessDays(2) });
       console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
+  }
+}
+
+async function draftFollowUp(cs, prov, count) {
+  const clientName = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'the patient';
+  try {
+    const prompt = `Write a brief, very polite and gracious FOLLOW-UP email to a medical provider's office, gently checking on scheduling for a patient MDconcierge referred. This is reminder #${count} of up to 3 — keep it light and no-pressure.
+Provider: ${prov.doctor_name}
+Patient: ${clientName}
+Reference: ${cs.case_id || ''}
+Rules: warm, gracious, light-touch (~70-90 words). Politely ask whether they've been able to schedule ${clientName}, or if there's anything MDconcierge can help with. No medical/legal advice, no extra PII. Include the reference. End "With gratitude," then "The MDconcierge Coordination Team". Return only the body.`;
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, messages: [{ role: 'user', content: prompt }] });
+    const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
+  } catch (e) { console.error('  follow-up draft failed: ' + e.message); }
+  return `Hello,\n\nJust a gentle note to check in on scheduling for ${clientName} (reference ${cs.case_id || 'N/A'}). Whenever it's convenient, we'd be grateful for a quick update — and please let us know if there's anything MDconcierge can help with.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+}
+async function followUpRouted() {
+  if (!SVC) return;
+  const nowIso = new Date().toISOString();
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&status=eq.routed&provider_notified=is.true&followup_count=lt.3&next_checkin=lte.${nowIso}`); }
+  catch (e) { console.error('follow-up: query failed: ' + e.message); return; }
+  console.log(`Follow-ups: ${cases.length} case(s) due.`);
+  for (const cs of cases) {
+    try {
+      const provs = await sbGet(`providers?select=*&id=eq.${cs.routed_provider_id}`); const prov = provs[0];
+      if (!prov) { await sbPatch(`cases?id=eq.${cs.id}`, { next_checkin: null }); continue; }
+      const contacts = await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&or=(provider_id.eq.${cs.routed_provider_id},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`);
+      const recipients = (contacts || []).filter(c => c.email && /@/.test(c.email));
+      const count = (cs.followup_count || 0) + 1;
+      if (recipients.length) {
+        const text = await draftFollowUp(cs, prov, count);
+        await sendMail(recipients.map(r => r.email).join(', '), `Following up — ${[cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id}`, text);
+      }
+      if (count >= 3) {
+        await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: null, notes: (cs.notes || '') + ' | FOLLOW-UP: 3 reminders sent, no scheduling confirmed — please review' });
+        console.log(`  case ${cs.case_id}: 3rd reminder sent — flagged for review.`);
+      } else {
+        await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: addBusinessDays(2) });
+        console.log(`  case ${cs.case_id}: follow-up ${count} sent; next in 2 business days.`);
+      }
+    } catch (e) { console.error(`  follow-up case ${cs.id} failed: ${e.message}`); }
   }
 }
 
@@ -283,6 +326,7 @@ async function main() {
     await client.logout();
   }
   await notifyRoutedProviders();
+  await followUpRouted();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
