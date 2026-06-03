@@ -3,6 +3,7 @@
 // Anything unclear is created as status='review' (never dropped, never mis-routed).
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import nodemailer from 'nodemailer';
 import Anthropic from '@anthropic-ai/sdk';
 
 const { ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY } = process.env;
@@ -120,6 +121,49 @@ function fallbackLead(fromAddr, subject, body) {
     injury_type: (subject||'').slice(0,80) || null, case_type: null, status: 'review', lead_source: 'attorney_referral_email', notes };
 }
 
+// ── Gracious auto-acknowledgment (coordinator reply: #1 acknowledge, #2 chase missing info) ──
+const transporter = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD } });
+
+async function draftReply(d, payload, toAddr) {
+  const refId = payload.case_id;
+  const clientName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || 'your client';
+  const contact = (d && d.referring_contact) || '';
+  const firm = (d && d.referring_firm) || '';
+  const missing = (d && d.missing) ? String(d.missing).trim() : '';
+  try {
+    const prompt = `Write a brief, very polite and gracious acknowledgment email replying to a law-firm contact who just referred a client to MDconcierge, a medical-legal coordination service.
+
+Referring contact: ${contact || '(unknown)'}
+Firm: ${firm || '(unknown)'}
+Client referred: ${clientName}
+Reference number: ${refId}
+Information we still need (may be 'none'): ${missing || 'none'}
+
+Rules:
+- Warm, gracious, genuinely appreciative, professional, concise (~90-130 words).
+- Sincerely thank them for the referral and for trusting MDconcierge; confirm it is received and our coordination team is already on it.
+- Include the reference number.
+- If information is still needed, politely and graciously ask them to reply with those specific items.
+- Do NOT give legal or medical advice. Do NOT promise specific timelines, outcomes, or guarantees.
+- End with "With gratitude," on one line, then "The MDconcierge Coordination Team" on the next.
+Return ONLY the email body text (no subject line).`;
+    const msg = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content: prompt }] });
+    const t = (msg.content?.[0]?.text || '').trim();
+    if (t) return t;
+  } catch (e) { console.error('  ↳ AI draft failed, using template: ' + e.message); }
+  const ask = missing ? ` When you have a moment, could you kindly reply with the following so we can move quickly: ${missing}.` : ' We will be in touch shortly with next steps.';
+  return `Hello${contact ? ' ' + contact : ''},\n\nThank you so much for your referral — we are truly grateful you thought of MDconcierge. We have received it for ${clientName} (reference ${refId}), and our coordination team is already getting to work.${ask}\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+}
+
+async function sendReply(to, origSubject, text, inReplyTo) {
+  const subject = /^re:/i.test(origSubject || '') ? origSubject : `Re: ${origSubject || 'Your referral'}`;
+  await transporter.sendMail({
+    from: `MDconcierge Coordination <${ZOHO_USER}>`,
+    to, subject, text,
+    headers: Object.assign({ 'X-MDC-Auto': 'ack' }, inReplyTo ? { 'In-Reply-To': inReplyTo, 'References': inReplyTo } : {}),
+  });
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -135,24 +179,38 @@ async function main() {
         fromAddr = msg.envelope?.from?.[0]?.address || '';
         subject = msg.envelope?.subject || '';
         const parsed = await simpleParser(msg.source);
+        // loop guard: never process our own automated acknowledgments
+        if (parsed.headers && parsed.headers.get('x-mdc-auto')) {
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
         body = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '');
-        let payload;
+        let payload, extracted = null;
         try {
-          const d = await extract(subject, fromAddr, body);
-          if (d && d.is_referral === false) {
+          extracted = await extract(subject, fromAddr, body);
+          if (extracted && extracted.is_referral === false) {
             console.log(`Skipping non-referral from ${fromAddr}: "${subject}"`);
             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
             skipped++;
             continue;
           }
-          payload = buildLead(d, fromAddr, subject);
+          payload = buildLead(extracted, fromAddr, subject);
         } catch (e) {
           console.error(`Parse failed for "${subject}" from ${fromAddr}: ${e.message} — creating review lead.`);
           payload = fallbackLead(fromAddr, subject, body);
+          extracted = null;
         }
         await insertLead(payload);
         console.log(`Created ${payload.case_id} [${payload.status}] from ${fromAddr} — "${subject}"`);
         created++;
+        // gracious auto-acknowledgment back to the referrer
+        if (fromAddr) {
+          try {
+            const replyText = await draftReply(extracted, payload, fromAddr);
+            await sendReply(fromAddr, subject, replyText, msg.envelope?.messageId);
+            console.log(`  ↳ acknowledged ${fromAddr}`);
+          } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
+        }
         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
       } catch (e) {
         console.error(`Error on uid ${uid} (${fromAddr}): ${e.message} — left unread for retry.`);

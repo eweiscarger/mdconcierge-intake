@@ -7,6 +7,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
     "imapflow": "^1.0.187",
-    "mailparser": "^3.7.2"
+    "mailparser": "^3.7.2",
+    "nodemailer": "^6.9.15"
   }
 }
