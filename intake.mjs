@@ -163,6 +163,68 @@ async function sendReply(to, origSubject, text, inReplyTo) {
     headers: Object.assign({ 'X-MDC-Auto': 'ack' }, inReplyTo ? { 'In-Reply-To': inReplyTo, 'References': inReplyTo } : {}),
   });
 }
+async function sendMail(to, subject, text) {
+  await transporter.sendMail({ from: `MDconcierge Coordination <${ZOHO_USER}>`, to, subject, text, headers: { 'X-MDC-Auto': 'notify' } });
+}
+
+// ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
+const SVC = process.env.SUPABASE_SERVICE_KEY;
+async function sbGet(path) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: { apikey: SVC, Authorization: `Bearer ${SVC}` } });
+  if (!r.ok) throw new Error(`GET ${path} ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+async function sbPatch(path, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'PATCH', headers: { apikey: SVC, Authorization: `Bearer ${SVC}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`PATCH ${path} ${r.status}: ${await r.text()}`);
+}
+async function draftProviderEmail(cs, prov, recipients) {
+  const clientName = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'a patient';
+  const firmM = (cs.notes || '').match(/Referring firm:\s*([^|]+)/); const firm = firmM ? firmM[1].trim() : '';
+  const locM = (cs.notes || '').match(/Location:\s*([^|]+)/); const location = locM ? locM[1].trim() : '';
+  try {
+    const prompt = `Write a brief, very polite and gracious email to a medical provider's office, notifying them that MDconcierge (a medical-legal coordination service) is referring a patient to them for care coordination.
+Provider: ${prov.doctor_name}
+Patient: ${clientName}
+Injury / needs: ${cs.injury_type || 'details in portal'}
+Location: ${location || '(on file)'}
+Patient is represented by counsel${firm ? ` (${firm})` : ''}.
+Reference: ${cs.case_id || ''}
+Recipient roles: ${recipients.map(r => r.role).filter(Boolean).join(', ') || 'office'}
+
+Rules: warm, gracious, professional, concise (~110 words). Ask them to reach out to begin coordinating scheduling. Note the patient is represented and MDconcierge will support coordination. Do NOT give medical or legal advice; do NOT include PII beyond the patient's name; do NOT promise timelines. Include the reference number. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content: prompt }] });
+    const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
+  } catch (e) { console.error('  provider draft failed, using template: ' + e.message); }
+  return `Hello,\n\nWe're grateful to connect with your office. MDconcierge is coordinating care for a patient, ${clientName} (reference ${cs.case_id || 'N/A'}), who is represented by counsel. We would be most grateful if your team could reach out to begin coordinating scheduling — our coordination team is happy to help with anything you need.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+}
+async function notifyRoutedProviders() {
+  if (!SVC) { console.log('No service key set; skipping provider notifications.'); return; }
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&status=eq.routed&provider_notified=is.false&routed_provider_id=not.is.null`); }
+  catch (e) { console.error('notify: cases query failed: ' + e.message); return; }
+  console.log(`Provider notifications: ${cases.length} routed case(s) pending.`);
+  for (const cs of cases) {
+    try {
+      const provId = cs.routed_provider_id;
+      const provs = await sbGet(`providers?select=*&id=eq.${provId}`);
+      const prov = provs[0];
+      if (!prov) { await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true }); continue; }
+      const contacts = await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&or=(provider_id.eq.${provId},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`);
+      const recipients = (contacts || []).filter(c => c.email && /@/.test(c.email));
+      if (!recipients.length) {
+        console.log(`  case ${cs.case_id}: provider "${prov.doctor_name}" has no referral-contact email — marking notified, flag for manual follow-up.`);
+        await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, notes: (cs.notes || '') + ' | PROVIDER NOTIFY: no referral-contact email on file — contact provider manually' });
+        continue;
+      }
+      const text = await draftProviderEmail(cs, prov, recipients);
+      const to = recipients.map(r => r.email).join(', ');
+      await sendMail(to, `New patient referral — ${[cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id}`, text);
+      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true });
+      console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
+    } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
+  }
+}
 
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
@@ -220,6 +282,7 @@ async function main() {
     lock.release();
     await client.logout();
   }
+  await notifyRoutedProviders();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
