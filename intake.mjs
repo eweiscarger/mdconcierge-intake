@@ -4,6 +4,7 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import { randomBytes } from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 
 const { ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY } = process.env;
@@ -192,24 +193,19 @@ async function sbPatch(path, body) {
   if (!r.ok) throw new Error(`PATCH ${path} ${r.status}: ${await r.text()}`);
 }
 async function draftProviderEmail(cs, prov, recipients) {
-  const clientName = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'a patient';
-  const firmM = (cs.notes || '').match(/Referring firm:\s*([^|]+)/); const firm = firmM ? firmM[1].trim() : '';
   const locM = (cs.notes || '').match(/Location:\s*([^|]+)/); const location = locM ? locM[1].trim() : '';
   try {
-    const prompt = `Write a brief, very polite and gracious email to a medical provider's office, notifying them that MDconcierge (a medical-legal coordination service) is referring a patient to them for care coordination.
+    const prompt = `Write a brief, very polite and gracious email to a medical provider's office notifying them of a NEW patient referral from MDconcierge (a medical-legal coordination service). IMPORTANT: this is PRE-ACCEPTANCE — do NOT include the patient's name or any contact info. Only mention case type, injury/area, and general location.
 Provider: ${prov.doctor_name}
-Patient: ${clientName}
-Injury / needs: ${cs.injury_type || 'details in portal'}
-Location: ${location || '(on file)'}
-Patient is represented by counsel${firm ? ` (${firm})` : ''}.
+Case type: ${cs.case_type || 'injury'}
+Injury / area: ${cs.injury_type || 'see details'}
+General location: ${location || '(unlocks on acceptance)'}
 Reference: ${cs.case_id || ''}
-Recipient roles: ${recipients.map(r => r.role).filter(Boolean).join(', ') || 'office'}
-
-Rules: warm, gracious, professional, concise (~110 words). Ask them to reach out to begin coordinating scheduling. Note the patient is represented and MDconcierge will support coordination. Do NOT give medical or legal advice; do NOT include PII beyond the patient's name; do NOT promise timelines. Include the reference number. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
-    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content: prompt }] });
+Rules: warm, gracious, concise (~80-100 words). Invite them to review and accept; explain that full patient details and EHR/case-management import unlock once they accept. The patient is represented by counsel. No medical/legal advice, NO patient name, NO contact info. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 350, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  provider draft failed, using template: ' + e.message); }
-  return `Hello,\n\nWe're grateful to connect with your office. MDconcierge is coordinating care for a patient, ${clientName} (reference ${cs.case_id || 'N/A'}), who is represented by counsel. We would be most grateful if your team could reach out to begin coordinating scheduling — our coordination team is happy to help with anything you need.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello,\n\nWe have a new ${cs.case_type || ''} patient referral${location ? (' in ' + location) : ''} we'd be grateful to coordinate with your office (reference ${cs.case_id || 'N/A'}). Injury / area: ${cs.injury_type || 'details on acceptance'}. The patient is represented by counsel.\n\nPlease review and accept below to unlock the full patient details and EHR / case-management import.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
 }
 async function notifyRoutedProviders() {
   if (!SVC) { console.log('No service key set; skipping provider notifications.'); return; }
@@ -230,33 +226,34 @@ async function notifyRoutedProviders() {
         await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, notes: (cs.notes || '') + ' | PROVIDER NOTIFY: no referral-contact email on file — contact provider manually' });
         continue;
       }
+      const token = cs.accept_token || randomBytes(24).toString('hex');
+      const locM = (cs.notes || '').match(/Location:\s*([^|]+)/); const location = locM ? locM[1].trim() : '';
       const text = await draftProviderEmail(cs, prov, recipients);
       const to = recipients.map(r => r.email).join(', ');
-      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      const base = 'https://mdconcierge.net/respond.html?t=' + token;
       const btns = [
-        mailtoBtn('✅ Accept referral', `ACCEPT ${cs.case_id} — ${patient}`, `We can accept ${patient} (${cs.case_id}). Please send the full case details and we'll coordinate scheduling.`, '#2ecc8a', '#06351f'),
-        mailtoBtn('Decline', `DECLINE ${cs.case_id} — ${patient}`, `Unfortunately we're unable to take ${patient} (${cs.case_id}) at this time.`, '#e0556b', '#ffffff'),
-        mailtoBtn('Reply to coordinate', `RE ${cs.case_id} — ${patient}`, `Hello, regarding ${patient} (${cs.case_id}):\n\n`),
+        { label: '✅ Accept & view case', href: base + '&a=accept', color: '#2ecc8a', text: '#06351f' },
+        { label: 'Decline', href: base + '&a=decline', color: '#e0556b', text: '#ffffff' },
+        mailtoBtn('Reply to coordinate', `RE ${cs.case_id}`, `Hello, regarding referral ${cs.case_id}:\n\n`),
       ];
-      await sendMail(to, `New patient referral — ${patient}`, text, emailHtml(text, btns));
-      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, followup_count: 0, next_checkin: addBusinessDays(2) });
+      const subj = `New patient referral — ${cs.case_type || 'case'}${location ? (' · ' + location) : ''} (${cs.case_id})`;
+      await sendMail(to, subj, text, emailHtml(text, btns));
+      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, followup_count: 0, next_checkin: addBusinessDays(2) });
       console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
   }
 }
 
 async function draftFollowUp(cs, prov, count) {
-  const clientName = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'the patient';
   try {
-    const prompt = `Write a brief, very polite and gracious FOLLOW-UP email to a medical provider's office, gently checking on scheduling for a patient MDconcierge referred. This is reminder #${count} of up to 3 — keep it light and no-pressure.
+    const prompt = `Write a brief, very polite and gracious FOLLOW-UP email to a medical provider's office, gently checking on a patient referral from MDconcierge. This is reminder #${count} of up to 3 — keep it light and no-pressure. IMPORTANT: do NOT include any patient name or contact info (pre-acceptance); refer to it only by the reference number.
 Provider: ${prov.doctor_name}
-Patient: ${clientName}
 Reference: ${cs.case_id || ''}
-Rules: warm, gracious, light-touch (~70-90 words). Politely ask whether they've been able to schedule ${clientName}, or if there's anything MDconcierge can help with. No medical/legal advice, no extra PII. Include the reference. End "With gratitude," then "The MDconcierge Coordination Team". Return only the body.`;
+Rules: warm, gracious, light-touch (~70-90 words). Politely ask whether they've had a chance to review/accept the referral, or if there's anything MDconcierge can help with. No medical/legal advice, no patient name, no PII. Include the reference. End "With gratitude," then "The MDconcierge Coordination Team". Return only the body.`;
     const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  follow-up draft failed: ' + e.message); }
-  return `Hello,\n\nJust a gentle note to check in on scheduling for ${clientName} (reference ${cs.case_id || 'N/A'}). Whenever it's convenient, we'd be grateful for a quick update — and please let us know if there's anything MDconcierge can help with.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello,\n\nJust a gentle note about referral ${cs.case_id || 'N/A'} — whenever convenient, we'd be grateful to know if you've had a chance to review and accept it, or if there's anything MDconcierge can help with.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
 }
 async function followUpRouted() {
   if (!SVC) return;
@@ -274,13 +271,12 @@ async function followUpRouted() {
       const count = (cs.followup_count || 0) + 1;
       if (recipients.length) {
         const text = await draftFollowUp(cs, prov, count);
-        const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
-        const btns = [
-          mailtoBtn('Update us on scheduling', `UPDATE ${cs.case_id} — ${patient}`, `Hello, an update on ${patient} (${cs.case_id}):\n\n`),
-          mailtoBtn('✅ Accept referral', `ACCEPT ${cs.case_id} — ${patient}`, `We can accept ${patient} (${cs.case_id}).`, '#2ecc8a', '#06351f'),
-        ];
-        await sendMail(recipients.map(r => r.email).join(', '), `Following up — ${patient}`, text, emailHtml(text, btns));
+        const btns = [];
+        if (cs.accept_token) btns.push({ label: '✅ Accept & view case', href: 'https://mdconcierge.net/respond.html?t=' + cs.accept_token + '&a=accept', color: '#2ecc8a', text: '#06351f' });
+        btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
+        await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns));
       }
+
       if (count >= 3) {
         await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: null, notes: (cs.notes || '') + ' | FOLLOW-UP: 3 reminders sent, no scheduling confirmed — please review' });
         console.log(`  case ${cs.case_id}: 3rd reminder sent — flagged for review.`);
