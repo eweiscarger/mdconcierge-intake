@@ -348,13 +348,87 @@ async function ensureGaps() {
         if (gf.filled(cs)) {
           if (existing && existing.status !== 'received') await sbPatch(`case_gaps?id=eq.${existing.id}`, { status: 'received', updated_at: new Date().toISOString() });
         } else if (!existing) {
-          await sbPost('case_gaps', { case_id: cs.id, field: gf.field, label: gf.label, owner: gf.owner, status: 'open', next_touch: new Date().toISOString(), touches: 0 });
+          await sbPost('case_gaps', { case_id: cs.id, field: gf.field, label: gf.label, owner: gf.owner, status: 'open', next_touch: addBusinessDays(3), touches: 0 });
           created++;
         }
       }
     } catch (e) { console.error(`  gaps case ${cs.id} failed: ${e.message}`); }
   }
   if (created) console.log(`Punch list: created ${created} new gap item(s).`);
+}
+
+// ── Phase C: the chase — batched, escalating follow-up on open gaps ──
+async function resolveOwnerEmails(cs, owner) {
+  if (owner === 'attorney') {
+    const notes = cs.notes || '';
+    const m1 = notes.match(/Referring email:\s*([^\s|]+)/i);
+    const m2 = notes.match(/Sender:\s*([^\s|]+)/i);
+    const e = (m1 && m1[1]) || (m2 && m2[1]) || '';
+    return /@/.test(e) ? [e.toLowerCase()] : [];
+  }
+  if (owner === 'provider') {
+    if (!cs.routed_provider_id) return [];
+    try {
+      const provs = await sbGet(`providers?select=*&id=eq.${cs.routed_provider_id}`); const prov = provs[0]; if (!prov) return [];
+      const contacts = await sbGet(`contacts?select=email&receives_referrals=is.true&or=(provider_id.eq.${cs.routed_provider_id},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`);
+      return (contacts || []).map(c => c.email).filter(e => e && /@/.test(e));
+    } catch (e) { return []; }
+  }
+  return [];
+}
+async function draftChase(byCase) {
+  const lines = Object.entries(byCase).map(([ref, items]) => `Case ${ref}: ${items.join(', ')}`).join('\n');
+  try {
+    const prompt = `Write a brief, warm, professional follow-up email from MDconcierge (medical-legal coordination) gently requesting the outstanding items we still need to keep the case(s) moving. Batch everything into ONE message.
+Outstanding by case:
+${lines}
+Rules: warm, brief, appreciative; no guilt or manufactured urgency. Present the asks as a tight bulleted list grouped by case reference. One clear reply path (just reply to this email). No legal/medical advice. Reference cases by their reference code only — NO patient names or PII. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 450, messages: [{ role: 'user', content: prompt }] });
+    const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
+  } catch (e) { console.error('  chase draft failed: ' + e.message); }
+  return `Hello,\n\nA quick follow-up on the items we still need to keep things moving:\n\n${lines}\n\nWhenever convenient, just reply with whatever you have — no rush, and thank you.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+}
+async function chaseGaps() {
+  if (!SVC) return;
+  const nowIso = new Date().toISOString();
+  let due = [], escal = [];
+  try { due = await sbGet(`case_gaps?select=*&status=eq.open&next_touch=lte.${nowIso}&touches=lt.2`); } catch (e) { console.error('chase: query failed: ' + e.message); return; }
+  try { escal = await sbGet(`case_gaps?select=*&status=eq.open&next_touch=lte.${nowIso}&touches=gte.2`); } catch (e) {}
+  const now = new Date();
+  const active = due.filter(g => !g.snooze_until || new Date(g.snooze_until) <= now);
+  const caseIds = [...new Set(active.concat(escal).map(g => g.case_id))];
+  const cases = {};
+  for (const cid of caseIds) { try { const c = (await sbGet(`cases?select=*&id=eq.${cid}`))[0]; if (c) cases[cid] = c; } catch (e) {} }
+  // group due gaps by resolved recipient email(s) -> one digest per contact, across cases
+  const groups = {};
+  for (const g of active) {
+    const cs = cases[g.case_id]; if (!cs) continue;
+    const emails = await resolveOwnerEmails(cs, g.owner);
+    if (!emails.length) continue; // no one to ask yet — hold the gap
+    const key = emails.slice().sort().join(',');
+    (groups[key] = groups[key] || { emails, items: [] }).items.push({ g, cs });
+  }
+  let sent = 0;
+  for (const key of Object.keys(groups)) {
+    const grp = groups[key];
+    const byCase = {};
+    for (const it of grp.items) (byCase[it.cs.case_id] = byCase[it.cs.case_id] || []).push(it.g.label || it.g.field);
+    const nCases = Object.keys(byCase).length;
+    const subj = nCases > 1 ? `MDconcierge — outstanding items (${nCases} cases)` : `MDconcierge — outstanding items (${Object.keys(byCase)[0]})`;
+    try {
+      const text = await draftChase(byCase);
+      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')]));
+      for (const it of grp.items) await sbPatch(`case_gaps?id=eq.${it.g.id}`, { touches: (it.g.touches || 0) + 1, next_touch: addBusinessDays(5), updated_at: new Date().toISOString() });
+      sent++;
+    } catch (e) { console.error('  chase send failed: ' + e.message); }
+  }
+  // T+15 escalation: due gaps already at the cap -> hand to Eric
+  let escalated = 0;
+  for (const g of escal) {
+    if (g.snooze_until && new Date(g.snooze_until) > now) continue;
+    try { await sbPatch(`case_gaps?id=eq.${g.id}`, { status: 'escalated', next_touch: null, updated_at: new Date().toISOString() }); escalated++; } catch (e) {}
+  }
+  console.log(`Chase: sent ${sent} digest(s); escalated ${escalated} item(s) to human.`);
 }
 
 async function main() {
@@ -418,6 +492,7 @@ async function main() {
   await notifyRoutedProviders();
   await followUpRouted();
   await ensureGaps();
+  await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
