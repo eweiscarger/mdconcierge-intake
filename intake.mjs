@@ -42,6 +42,12 @@ Return ONLY a JSON object (no prose, no code fence):
  "case_type": "",                    // one of: auto, truck, wc, slip, pi, malpractice, ssd, ltd, other
  "injury_description": "",
  "needs": "",                        // what the client needs (medical provider, imaging, surgery, funding, etc.)
+ "claim_number": "",                 // WC/PI claim number if stated
+ "claim_status": "",                 // NCP / TNCP / NCD / litigated / accepted / denied / unknown
+ "date_of_injury": "",               // as stated; may be vague or ""
+ "date_first_treatment": "",         // as stated or ""
+ "adjuster_name": "", "adjuster_phone": "",
+ "panel_posted": "",                 // yes / no / unknown
  "referring_firm": "",               // the law firm / organization name
  "referring_contact": "",            // the person who sent it
  "confidence": "high|medium|low",    // confidence the core client info is present and unambiguous
@@ -100,6 +106,15 @@ function buildLead(d, fromAddr, subject) {
     patient_zip: (String(d.zip||'').replace(/\D/g,'').slice(0,5)) || null,
     injury_type: (d.injury_description || d.needs || '').slice(0, 80) || null,
     case_type: d.case_type || null,
+    claim_number: d.claim_number || null,
+    claim_status: d.claim_status || null,
+    date_of_injury: d.date_of_injury || null,
+    date_first_treatment: d.date_first_treatment || null,
+    adjuster_name: d.adjuster_name || null,
+    adjuster_phone: d.adjuster_phone || null,
+    panel_posted: d.panel_posted || null,
+    representation_status: 'represented',
+    billing_pathway: deriveBillingPathway({ claim_status: d.claim_status }),
     status: needsReview ? 'review' : 'new',
     lead_source: 'attorney_referral_email',
     notes,
@@ -294,6 +309,54 @@ async function followUpRouted() {
   }
 }
 
+// ── Phase B: billing-pathway label + punch-list (case_gaps) for IN-COORDINATION cases only ──
+function deriveBillingPathway(cs) {
+  const s = String(cs.claim_status || '').toLowerCase();
+  if (/ncd|denied/.test(s)) return 'lien';
+  if (/litig/.test(s)) return 'litigation';
+  if (/tncp|temporary|provisional/.test(s)) return 'tncp_watch';
+  if (/ncp|accepted|agreement|medical.?only/.test(s)) return 'wc_direct';
+  return 'establish';
+}
+const GAP_FIELDS = [
+  { field: 'claim_number',        label: 'Claim number',           owner: 'attorney', filled: c => !!c.claim_number },
+  { field: 'claim_status',        label: 'Claim status / NCP',     owner: 'attorney', filled: c => !!c.claim_status },
+  { field: 'date_of_injury',      label: 'Date of injury',         owner: 'attorney', filled: c => !!c.date_of_injury },
+  { field: 'adjuster',            label: 'Adjuster contact',       owner: 'attorney', filled: c => !!(c.adjuster_name || c.adjuster_phone) },
+  { field: 'date_first_treatment',label: 'Date of first treatment',owner: 'provider', filled: c => !!c.date_first_treatment },
+];
+async function sbPost(path, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'POST', headers: { apikey: SVC, Authorization: `Bearer ${SVC}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`POST ${path} ${r.status}: ${await r.text()}`);
+}
+async function ensureGaps() {
+  if (!SVC) return;
+  let cases = [];
+  // IN-COORDINATION only: attorney-referral, attorney attached, or routed. InjuredGuide pre-referral leads are excluded.
+  try { cases = await sbGet(`cases?select=*&or=(lead_source.ilike.*attorney*,attorney_id.not.is.null,routed_provider_id.not.is.null)`); }
+  catch (e) { console.error('gaps: cases query failed: ' + e.message); return; }
+  let allGaps = [];
+  try { allGaps = await sbGet(`case_gaps?select=*`); } catch (e) { console.error('gaps: gaps query failed: ' + e.message); return; }
+  let created = 0;
+  for (const cs of cases) {
+    try {
+      const bp = deriveBillingPathway(cs);
+      if ((cs.billing_pathway || '') !== bp) await sbPatch(`cases?id=eq.${cs.id}`, { billing_pathway: bp });
+      const gapsFor = allGaps.filter(g => g.case_id === cs.id);
+      for (const gf of GAP_FIELDS) {
+        const existing = gapsFor.find(g => g.field === gf.field);
+        if (gf.filled(cs)) {
+          if (existing && existing.status !== 'received') await sbPatch(`case_gaps?id=eq.${existing.id}`, { status: 'received', updated_at: new Date().toISOString() });
+        } else if (!existing) {
+          await sbPost('case_gaps', { case_id: cs.id, field: gf.field, label: gf.label, owner: gf.owner, status: 'open', next_touch: new Date().toISOString(), touches: 0 });
+          created++;
+        }
+      }
+    } catch (e) { console.error(`  gaps case ${cs.id} failed: ${e.message}`); }
+  }
+  if (created) console.log(`Punch list: created ${created} new gap item(s).`);
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -354,6 +417,7 @@ async function main() {
   }
   await notifyRoutedProviders();
   await followUpRouted();
+  await ensureGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
