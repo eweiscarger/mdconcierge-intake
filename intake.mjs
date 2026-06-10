@@ -224,7 +224,6 @@ async function sendMail(to, subject, text, html) {
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
 const SVC = process.env.SUPABASE_SERVICE_KEY;
 const ACCEPT_TTL_DAYS = 14, STATUS_TTL_DAYS = 30, PORTAL_SETUP_TTL_DAYS = 14; // magic-link / invite lifetimes
-const ADMIN_EMAIL = 'eric@mdconcierge.net'; // where partner-edit heads-ups go
 function daysFromNow(n){ return new Date(Date.now() + n*86400000).toISOString(); }
 async function logAudit(caseId, action, detail){ if(!SVC||!caseId)return; try{ await sbPost('audit_log', { case_id: caseId, action, detail: detail||null, source: 'automation' }); }catch(e){} }
 function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
@@ -639,11 +638,8 @@ async function sendProfileChangeNotices() {
   let sent = 0;
   for (const ch of changes) {
     try {
-      const who = [ch.editor_name, ch.editor_email].filter(Boolean).join(' · ') || ch.editor_email || 'a partner';
-      // 1) heads-up to Eric (no approval needed — informational)
-      const adminText = `Heads up — a network partner just updated their own information in the portal.\n\nWho: ${who}\nType: ${ch.role}\nWhat changed: ${ch.summary}\n\nThe change is already live. Open the Network tab in your dashboard to view it. No action needed.`;
-      await sendMail(ADMIN_EMAIL, `Partner updated their info — ${ch.role}`, adminText, emailHtml(adminText, [{ label: 'Open dashboard', href: 'https://mdconcierge.net/admin-v2.html', color: '#1a2230', text: '#ffffff' }]));
-      // 2) confirmation back to the editor
+      // Eric is notified IN THE DASHBOARD (a 🔔 bell reading profile_changes), not by email — per his request.
+      // Here we only send the editor their confirmation, then mark the row as editor-notified.
       if (ch.editor_email && /@/.test(ch.editor_email)) {
         const confText = `Hello${ch.editor_name ? (' ' + ch.editor_name) : ''},\n\nThis confirms your MDconcierge information was updated successfully — ${ch.summary.toLowerCase()}. The changes are now live. If you didn't make this change, please reply to this email right away.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
         await sendMail(ch.editor_email, 'Your MDconcierge info was updated', confText, emailHtml(confText, []));
