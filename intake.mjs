@@ -595,6 +595,40 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
   return { forwarded: true, role: recipientRole };
 }
 
+// ── Self-serve onboarding: send the sign-up-form link to people Eric invites from the dashboard ──
+async function draftSignupInvite(name, type) {
+  const what = type === 'attorney' ? 'attorney network' : 'provider network';
+  try {
+    const prompt = `Write a brief, warm, professional invitation email from MDconcierge (a medical-legal coordination service) inviting someone to join our ${what} by completing a short online onboarding form.
+Recipient name: ${name || '(unknown)'}
+Rules: warm, gracious, concise (~70-90 words). Invite them to complete a quick form so we have everything we need to coordinate smoothly (no back-and-forth later). Mention it only takes a few minutes and they can add their team/contacts. Do NOT give legal/medical advice. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, messages: [{ role: 'user', content: prompt }] });
+    const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
+  } catch (e) { console.error('  signup-invite draft failed: ' + e.message); }
+  return `Hello${name ? (' ' + name) : ''},\n\nWe'd be delighted to have you join the MDconcierge ${what}. To get started, please take a few minutes to complete our short onboarding form — you can add your team and points of contact so we have everything we need to coordinate smoothly from day one.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+}
+async function sendSignupInvites() {
+  if (!SVC) return;
+  let invites = [];
+  try { invites = await sbGet(`signup_invites?select=*&status=eq.pending`); }
+  catch (e) { console.error('signup-invites: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const inv of invites) {
+    try {
+      if (!inv.email || !/@/.test(inv.email)) { await sbPatch(`signup_invites?id=eq.${inv.id}`, { status: 'failed', sent_at: new Date().toISOString() }); continue; }
+      const link = `https://mdconcierge.net/signup.html?type=${inv.type === 'attorney' ? 'attorney' : 'provider'}`;
+      const text = await draftSignupInvite(inv.name, inv.type);
+      await sendMail(inv.email, 'Welcome to MDconcierge — quick onboarding', text,
+        emailHtml(text, [{ label: '📝 Complete onboarding', href: link, color: '#c8922a', text: '#1a1305' }]));
+      await sbPatch(`signup_invites?id=eq.${inv.id}`, { status: 'sent', sent_at: new Date().toISOString() });
+      try { await sbPost('audit_log', { case_id: null, action: 'signup_invite_sent', detail: `${inv.type}: ${inv.email}`, source: 'automation' }); } catch (e) {}
+      sent++;
+      console.log(`  signup invite sent to ${inv.type} ${inv.email}`);
+    } catch (e) { console.error(`  signup invite ${inv.id} failed: ${e.message} — left pending for retry.`); }
+  }
+  if (sent) console.log(`Sign-up invites sent: ${sent}.`);
+}
+
 // ── Partner portal: AI as traffic cop — auto-invite ONLY on-file parties, hold free-domain for Eric ──
 // Safety: an account is auto-linked to one provider/attorney (or just an email) and the scoped
 // SECURITY DEFINER RPCs return ONLY that party's cases — a wrong account sees nothing it shouldn't.
@@ -746,6 +780,7 @@ async function main() {
   await relayAppointments();
   await emailArtifactRequests();
   await handleEvents();
+  await sendSignupInvites();
   await ensureGaps();
   await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
