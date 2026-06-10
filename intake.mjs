@@ -460,6 +460,30 @@ async function relayAppointments() {
   if (sent) console.log(`Appointments relayed: ${sent}.`);
 }
 
+// ── Phase E: email artifact requests to the holder (records/bills/narratives — tracking only, never the doc) ──
+async function emailArtifactRequests() {
+  if (!SVC) return;
+  let arts = [];
+  try { arts = await sbGet(`case_artifacts?select=*&status=eq.requested&notified=is.false`); }
+  catch (e) { console.error('artifacts: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const a of arts) {
+    try {
+      const cs = (await sbGet(`cases?select=*&id=eq.${a.case_id}`))[0];
+      if (!cs) { await sbPatch(`case_artifacts?id=eq.${a.id}`, { notified: true }); continue; }
+      const emails = await resolveOwnerEmails(cs, a.holder);
+      if (!emails.length) continue; // hold until we can reach the holder
+      const recip = a.recipient === 'attorney' ? 'the attorney' : 'the provider';
+      const label = a.label || a.type;
+      const text = `Hello,\n\nWhen you have a moment, could you please send the ${label} for referral ${cs.case_id} directly to ${recip}? Just reply here once it's on its way and we'll note it as sent. We truly appreciate it.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      await sendMail(emails.join(', '), `Request: ${label} — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Confirm sent', `SENT: ${label} — ${cs.case_id}`, `We've sent the ${label} to ${recip} for ${cs.case_id}.`)]));
+      await sbPatch(`case_artifacts?id=eq.${a.id}`, { notified: true });
+      sent++;
+    } catch (e) { console.error(`  artifact ${a.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Artifact requests sent: ${sent}.`);
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -521,6 +545,7 @@ async function main() {
   await notifyRoutedProviders();
   await followUpRouted();
   await relayAppointments();
+  await emailArtifactRequests();
   await ensureGaps();
   await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
