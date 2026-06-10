@@ -101,6 +101,7 @@ function buildLead(d, fromAddr, subject) {
   return {
     case_id: refId,
     status_token: randomBytes(24).toString('hex'),
+    status_token_exp: new Date(Date.now() + 30*86400000).toISOString(),
     patient_first: d.client_first ? title(d.client_first) : null,
     patient_last: d.client_last ? title(d.client_last) : null,
     patient_phone: d.client_phone ? fmtPhone(d.client_phone) : null,
@@ -192,10 +193,14 @@ function actionPills(ref){
 }
 // ── Phase H: per-party live-status portal link ──
 async function statusToken(cs) {
-  if (cs.status_token) return cs.status_token;
+  const exp = daysFromNow(STATUS_TTL_DAYS); // refresh on each send so active cases stay live, stale links die
+  if (cs.status_token) {
+    try { if (SVC) await sbPatch(`cases?id=eq.${cs.id}`, { status_token_exp: exp }); } catch (e) {}
+    cs.status_token_exp = exp; return cs.status_token;
+  }
   const tok = randomBytes(24).toString('hex');
-  try { if (SVC) await sbPatch(`cases?id=eq.${cs.id}`, { status_token: tok }); } catch (e) {}
-  cs.status_token = tok; return tok;
+  try { if (SVC) await sbPatch(`cases?id=eq.${cs.id}`, { status_token: tok, status_token_exp: exp }); } catch (e) {}
+  cs.status_token = tok; cs.status_token_exp = exp; return tok;
 }
 function statusBtn(tok) { return { label: '📊 View live status', href: 'https://mdconcierge.net/status.html?t=' + tok, color: '#1a2230', text: '#ffffff' }; }
 function reportPills(ref){
@@ -218,6 +223,9 @@ async function sendMail(to, subject, text, html) {
 
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
 const SVC = process.env.SUPABASE_SERVICE_KEY;
+const ACCEPT_TTL_DAYS = 14, STATUS_TTL_DAYS = 30; // magic-link lifetimes
+function daysFromNow(n){ return new Date(Date.now() + n*86400000).toISOString(); }
+async function logAudit(caseId, action, detail){ if(!SVC||!caseId)return; try{ await sbPost('audit_log', { case_id: caseId, action, detail: detail||null, source: 'automation' }); }catch(e){} }
 function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: { apikey: SVC, Authorization: `Bearer ${SVC}` } });
@@ -276,7 +284,8 @@ async function notifyRoutedProviders() {
       ];
       const subj = `New patient referral — ${cs.case_type || 'case'}${location ? (' · ' + location) : ''} (${cs.case_id})`;
       await sendMail(to, subj, text, emailHtml(text, btns));
-      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, followup_count: 0, next_checkin: addBusinessDays(2) });
+      await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
+      await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
       console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
   }
@@ -321,10 +330,10 @@ async function followUpRouted() {
       }
 
       if (count >= 3) {
-        await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: null, notes: (cs.notes || '') + ' | FOLLOW-UP: 3 reminders sent, no scheduling confirmed — please review' });
+        await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: null, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), notes: (cs.notes || '') + ' | FOLLOW-UP: 3 reminders sent, no scheduling confirmed — please review' });
         console.log(`  case ${cs.case_id}: 3rd reminder sent — flagged for review.`);
       } else {
-        await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: addBusinessDays(2) });
+        await sbPatch(`cases?id=eq.${cs.id}`, { followup_count: count, next_checkin: addBusinessDays(2), accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS) });
         console.log(`  case ${cs.case_id}: follow-up ${count} sent; next in 2 business days.`);
       }
     } catch (e) { console.error(`  follow-up case ${cs.id} failed: ${e.message}`); }
@@ -471,6 +480,7 @@ async function relayAppointments() {
       const rStok = await statusToken(cs);
       await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id) + reportPills(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
+      await logAudit(cs.id, 'appointment_relayed', cs.appointment_at || null);
       sent++;
       console.log(`  relayed appointment to attorney for ${cs.case_id}`);
     } catch (e) { console.error(`  relay case ${cs.id} failed: ${e.message}`); }
@@ -496,6 +506,7 @@ async function emailArtifactRequests() {
       const text = `Hello,\n\nWhen you have a moment, could you please send the ${label} for referral ${cs.case_id} directly to ${recip}? Just reply here once it's on its way and we'll note it as sent. We truly appreciate it.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
       await sendMail(emails.join(', '), `Request: ${label} — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Confirm sent', `SENT: ${label} — ${cs.case_id}`, `We've sent the ${label} to ${recip} for ${cs.case_id}.`)]));
       await sbPatch(`case_artifacts?id=eq.${a.id}`, { notified: true });
+      await logAudit(a.case_id, 'artifact_requested', label);
       sent++;
     } catch (e) { console.error(`  artifact ${a.id} failed: ${e.message}`); }
   }
@@ -531,6 +542,7 @@ async function handleEvents() {
         await sendMail(emails.join(', '), `${type} reported — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${type} — ${cs.case_id}`, `Hello,\n\nRegarding the ${type} on ${cs.case_id}:\n\n`)]));
       }
       await sbPatch(`events?id=eq.${ev.id}`, { notified: true });
+      await logAudit(cs.id, 'event_' + type + '_actioned', ev.deadline || null);
       sent++;
     } catch (e) { console.error(`  event ${ev.id} failed: ${e.message}`); }
   }
@@ -578,6 +590,7 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
     headers: { 'X-MDC-Auto': 'forward' },
   });
   if (SVC) await markArtifactTransmitted(cs.id, null);
+  await logAudit(cs.id, 'document_forwarded', `to ${recipientRole}: ${fileList}`);
   return { forwarded: true, role: recipientRole };
 }
 
