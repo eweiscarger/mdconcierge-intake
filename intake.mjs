@@ -537,6 +537,50 @@ async function handleEvents() {
   if (sent) console.log(`Case events handled: ${sent}.`);
 }
 
+// ── Phase E(b): conduit document forwarding — NEVER STORED ──
+// We forward inbound documents to the case's counterparty in-memory and discard them.
+// Nothing is written to disk or the database; we only record that a transmission occurred.
+async function markArtifactTransmitted(caseId, labelHint, autoCreate = true) {
+  try {
+    const arts = await sbGet(`case_artifacts?select=*&case_id=eq.${caseId}&status=eq.requested&order=created_at.asc`);
+    let target = null;
+    if (labelHint) target = (arts || []).find(a => (a.label || a.type || '').toLowerCase().includes(String(labelHint).toLowerCase().slice(0, 6)));
+    target = target || (arts || [])[0];
+    if (target) { await sbPatch(`case_artifacts?id=eq.${target.id}`, { status: 'transmitted', transmitted_at: new Date().toISOString() }); return true; }
+    if (autoCreate) { await sbPost('case_artifacts', { case_id: caseId, type: 'records', label: labelHint || 'Forwarded document(s)', holder: 'provider', recipient: 'attorney', status: 'transmitted', notified: true, transmitted_at: new Date().toISOString() }); return true; }
+  } catch (e) { console.error('  markArtifactTransmitted: ' + e.message); }
+  return false;
+}
+async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
+  // Only ever forward to a KNOWN party on this case — never an arbitrary address.
+  const provEmails = (await resolveOwnerEmails(cs, 'provider')).map(e => e.toLowerCase());
+  const attyEmails = (await resolveOwnerEmails(cs, 'attorney')).map(e => e.toLowerCase());
+  const fromLc = (fromAddr || '').toLowerCase();
+  let senderRole, recipientRole, recipients;
+  if (provEmails.includes(fromLc)) { senderRole = 'the provider'; recipientRole = 'attorney'; recipients = attyEmails; }
+  else if (attyEmails.includes(fromLc)) { senderRole = 'the attorney'; recipientRole = 'provider'; recipients = provEmails; }
+  else { senderRole = 'the originating office'; recipientRole = 'attorney'; recipients = attyEmails; } // default: records flow to counsel (a known party)
+  if (!recipients || !recipients.length) {
+    if (SVC) await sbPost('case_artifacts', { case_id: cs.id, type: 'records', label: `Inbound document(s) — no ${recipientRole} email on file; forward manually`, holder: 'provider', recipient: recipientRole, status: 'requested', notified: true });
+    return { forwarded: false, reason: 'no-recipient' };
+  }
+  const attachments = docs.map((a, i) => ({ filename: a.filename || `document-${i + 1}`, content: a.content, contentType: a.contentType || 'application/octet-stream' }));
+  const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+  const fileList = docs.map(a => a.filename || 'document').join(', ');
+  const note = `Hello,\n\nPlease find the attached document(s) for referral ${cs.case_id} (${patient}), forwarded on behalf of ${senderRole}: ${fileList}.\n\nMDconcierge acts only as a coordination conduit under our mutual agreements and does not retain a copy of these records. Please let us know if anything is missing.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  await transporter.sendMail({
+    from: `MDconcierge Coordination <${ZOHO_USER}>`,
+    to: recipients.join(', '),
+    subject: `Documents for referral ${cs.case_id}`,
+    text: note,
+    html: emailHtml(note, [mailtoBtn('Acknowledge receipt', `RECEIVED: ${cs.case_id}`, `We've received the documents for ${cs.case_id}.`)]),
+    attachments,
+    headers: { 'X-MDC-Auto': 'forward' },
+  });
+  if (SVC) await markArtifactTransmitted(cs.id, null);
+  return { forwarded: true, role: recipientRole };
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -573,6 +617,32 @@ async function main() {
               } else { console.log(`Report email for unknown ref ${refM[1]} — left for manual review.`); }
             } catch (e) { console.error('  report-event log failed: ' + e.message); }
           } else { console.log(`Report email with no case ref — "${subject}"`); }
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
+        const docRefM = (subject + ' ' + body).match(/\b([A-Z]{2,4}-[A-Z]-\d{4}-\d+)\b/i);
+        // Phase E(b): inbound document(s) for a known case -> forward to the counterparty (conduit; never stored)
+        const docs = (parsed.attachments || []).filter(a => a && a.content && (a.filename || (a.size || 0) > 2048));
+        if (docs.length && docRefM && SVC) {
+          let fcs = null;
+          try { fcs = (await sbGet(`cases?select=*&case_id=eq.${docRefM[1].toUpperCase()}`))[0]; } catch (e) {}
+          if (fcs) {
+            try {
+              const res = await forwardDocuments(fcs, fromAddr, subject, body, docs);
+              if (res.forwarded) console.log(`Forwarded ${docs.length} document(s) for ${fcs.case_id} -> ${res.role} (not retained).`);
+              else console.log(`Document for ${fcs.case_id} not auto-forwarded (${res.reason}) — flagged for manual handling.`);
+            } catch (e) { console.error(`  doc forward failed for ${fcs.case_id}: ${e.message} — left unread for retry.`); continue; }
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+            continue;
+          }
+        }
+        // Phase E: a "SENT:" confirmation (no attachment) -> mark the requested artifact transmitted
+        const sentM = subject.match(/^\s*SENT:\s*(.+?)\s*[—-]+\s*([A-Z]{2,4}-[A-Z]-\d{4}-\d+)/i);
+        if (sentM && SVC) {
+          try {
+            const scs = (await sbGet(`cases?select=id&case_id=eq.${sentM[2].toUpperCase()}`))[0];
+            if (scs) { await markArtifactTransmitted(scs.id, sentM[1].trim()); console.log(`Marked artifact transmitted (sent direct) for ${sentM[2]}.`); }
+          } catch (e) { console.error('  sent-confirm failed: ' + e.message); }
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
         }
