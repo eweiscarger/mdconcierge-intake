@@ -223,7 +223,7 @@ async function sendMail(to, subject, text, html) {
 
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
 const SVC = process.env.SUPABASE_SERVICE_KEY;
-const ACCEPT_TTL_DAYS = 14, STATUS_TTL_DAYS = 30; // magic-link lifetimes
+const ACCEPT_TTL_DAYS = 14, STATUS_TTL_DAYS = 30, PORTAL_SETUP_TTL_DAYS = 14; // magic-link / invite lifetimes
 function daysFromNow(n){ return new Date(Date.now() + n*86400000).toISOString(); }
 async function logAudit(caseId, action, detail){ if(!SVC||!caseId)return; try{ await sbPost('audit_log', { case_id: caseId, action, detail: detail||null, source: 'automation' }); }catch(e){} }
 function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
@@ -286,6 +286,7 @@ async function notifyRoutedProviders() {
       await sendMail(to, subj, text, emailHtml(text, btns));
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
       await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
+      for (const rc of recipients) await sendPortalInvite('provider', provId, rc.email, rc.name); // first-time only; dedupes
       console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
   }
@@ -594,6 +595,47 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
   return { forwarded: true, role: recipientRole };
 }
 
+// ── Partner portal: AI as traffic cop — auto-invite ONLY on-file parties, hold free-domain for Eric ──
+// Safety: an account is auto-linked to one provider/attorney (or just an email) and the scoped
+// SECURITY DEFINER RPCs return ONLY that party's cases — a wrong account sees nothing it shouldn't.
+function portalDomainHold(email) {
+  const d = (String(email || '').split('@')[1] || '').toLowerCase();
+  return FREE_DOMAINS.includes(d) || !d; // free / no domain → hold for Eric to confirm
+}
+async function ensurePortalAccount(role, recordId, email, name) {
+  if (!SVC) return null;
+  const em = String(email || '').trim().toLowerCase();
+  if (!em || !/@/.test(em)) return null;
+  let existing = [];
+  try { existing = await sbGet(`portal_accounts?select=id,status&email=eq.${encodeURIComponent(em)}`); } catch (e) { return null; }
+  if (existing.length) return null; // already invited / active / held / disabled — never spam a second invite
+  const hold = portalDomainHold(em);
+  const setup = randomBytes(24).toString('hex');
+  const row = {
+    role, email: em, name: name || null,
+    setup_token: setup, setup_exp: daysFromNow(PORTAL_SETUP_TTL_DAYS),
+    status: hold ? 'hold' : 'invited',
+    flagged_reason: hold ? 'free-domain email — confirm identity before granting access' : null,
+  };
+  if (role === 'provider') row.provider_id = recordId || null;
+  if (role === 'attorney') row.attorney_id = recordId || null;
+  try { await sbPost('portal_accounts', row); }
+  catch (e) { console.error('  portal account create failed: ' + e.message); return null; }
+  try { await sbPost('audit_log', { case_id: null, action: 'portal_account_created', detail: `${role} ${em}${hold ? ' (held: free domain)' : ''}`, source: 'automation' }); } catch (e) {}
+  return hold ? { held: true, email: em } : { held: false, email: em, link: `https://mdconcierge.net/portal.html?setup=${setup}` };
+}
+async function sendPortalInvite(role, recordId, email, name) {
+  const r = await ensurePortalAccount(role, recordId, email, name);
+  if (!r) return;                       // existing account → nothing to do
+  if (r.held) { console.log(`  portal invite HELD (free domain) for ${role} ${r.email} — review in dashboard.`); return; }
+  const what = role === 'provider' ? 'your MDconcierge referrals' : "the cases we're coordinating for your clients";
+  const text = `Hello${name ? (' ' + name) : ''},\n\nYou can now manage ${what} from one secure portal — no more searching your inbox for the right link. Set a password below and you'll be able to sign in anytime to see your cases and act on them.\n\nThis setup link is unique to you and expires in ${PORTAL_SETUP_TTL_DAYS} days. If you weren't expecting this, you can safely ignore it.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  try {
+    await sendMail(r.email, 'Set up your MDconcierge portal login', text, emailHtml(text, [{ label: '🔐 Set up my login', href: r.link, color: '#c8922a', text: '#1a1305' }]));
+    console.log(`  portal invite sent to ${role} ${r.email}`);
+  } catch (e) { console.error('  portal invite send failed: ' + e.message); }
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -687,6 +729,7 @@ async function main() {
             const ackHtml = emailHtml(replyText, ackBtns, actionPills(payload.case_id) + reportPills(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
             console.log(`  ↳ acknowledged ${fromAddr}`);
+            await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact); // first-time only; free domains held
           } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
         }
         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
