@@ -629,6 +629,36 @@ async function sendSignupInvites() {
   if (sent) console.log(`Sign-up invites sent: ${sent}.`);
 }
 
+// ── Signature → contact: Eric forwards a business email to referrals@ with subject "Contact …" ──
+async function scrapeSignature(fromAddr, subject, body) {
+  const prompt = `Extract the BUSINESS CONTACT from this email's signature. The email may be a FORWARDED message — extract the ORIGINAL person/office, NOT the forwarder (${fromAddr}) and NOT MDconcierge. Return ONLY this JSON (no prose, no code fence):
+{"found": true/false, "name":"", "title":"", "company":"", "email":"", "phone":"", "address":"", "type":"medical_office|law_firm|vendor|other"}
+
+Subject: ${subject}
+Body:
+${String(body || '').slice(0, 5000)}
+
+Use "" for anything not present. found=false if there's no clear business person/office in the text. Prefer the most complete signature block.`;
+  let d;
+  try {
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 500, messages: [{ role: 'user', content: prompt }] });
+    let txt = (m.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    d = JSON.parse(txt);
+  } catch (e) { console.error('  signature parse failed: ' + e.message); return { created: false }; }
+  if (!d || d.found === false || (!d.name && !d.email && !d.phone)) return { created: false };
+  const row = {
+    name: d.name || null, title: d.title || null, role: d.title || null,
+    company: d.company || null, email: (d.email || '').toLowerCase() || null,
+    phone: d.phone || null, address: d.address || null,
+    source: 'signature', receives_referrals: false,
+    notes: d.type ? ('Type: ' + d.type) : null,
+  };
+  try { await sbPost('contacts', row); }
+  catch (e) { console.error('  contact insert failed: ' + e.message); return { created: false }; }
+  try { await sbPost('audit_log', { case_id: null, action: 'contact_scraped', detail: `${d.name || ''}${d.company ? (' — ' + d.company) : ''}`.trim(), source: 'automation' }); } catch (e) {}
+  return { created: true, name: d.name, company: d.company };
+}
+
 // ── Website → provider draft: fetch a practice site, extract with Claude, land it in the Sign-ups queue ──
 function htmlToText(html) {
   return String(html || '')
@@ -808,6 +838,15 @@ async function main() {
           continue;
         }
         body = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '');
+        // Signature import: Eric forwards a business email from @mdconcierge.net with subject starting "Contact"
+        if (/^\s*contacts?\b/i.test(subject) && /@mdconcierge\.net\s*$/i.test(fromAddr) && SVC) {
+          try {
+            const res = await scrapeSignature(fromAddr, subject, body);
+            console.log(res.created ? `Scraped contact: ${res.name || ''}${res.company ? (' — ' + res.company) : ''}` : `Contact email had no extractable signature — "${subject}"`);
+          } catch (e) { console.error('  contact scrape failed: ' + e.message); }
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
         // Phase F: a reported case event ("Report UR/IME/IRE — <ref>") -> log an event, don't create a lead
         const repM = subject.match(/\breport\s+(UR|IME|IRE)\b/i);
         if (repM) {
