@@ -286,7 +286,7 @@ async function notifyRoutedProviders() {
       await sendMail(to, subj, text, emailHtml(text, btns));
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
       await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
-      for (const rc of recipients) await sendPortalInvite('provider', provId, rc.email, rc.name); // first-time only; dedupes
+      for (const rc of recipients) await sendPortalInvite('provider', provId, rc.email, rc.name, prov.practice_id); // first-time only; dedupes; practice-scoped
       console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
   }
@@ -636,7 +636,7 @@ function portalDomainHold(email) {
   const d = (String(email || '').split('@')[1] || '').toLowerCase();
   return FREE_DOMAINS.includes(d) || !d; // free / no domain → hold for Eric to confirm
 }
-async function ensurePortalAccount(role, recordId, email, name) {
+async function ensurePortalAccount(role, recordId, email, name, practiceId) {
   if (!SVC) return null;
   const em = String(email || '').trim().toLowerCase();
   if (!em || !/@/.test(em)) return null;
@@ -651,15 +651,17 @@ async function ensurePortalAccount(role, recordId, email, name) {
     status: hold ? 'hold' : 'invited',
     flagged_reason: hold ? 'free-domain email — confirm identity before granting access' : null,
   };
-  if (role === 'provider') row.provider_id = recordId || null;
+  // provider accounts scope by PRACTICE when the provider belongs to one (front desk sees every doctor);
+  // solo providers (no practice) fall back to the single provider_id.
+  if (role === 'provider') { row.provider_id = recordId || null; row.practice_id = practiceId || null; }
   if (role === 'attorney') row.attorney_id = recordId || null;
   try { await sbPost('portal_accounts', row); }
   catch (e) { console.error('  portal account create failed: ' + e.message); return null; }
   try { await sbPost('audit_log', { case_id: null, action: 'portal_account_created', detail: `${role} ${em}${hold ? ' (held: free domain)' : ''}`, source: 'automation' }); } catch (e) {}
   return hold ? { held: true, email: em } : { held: false, email: em, link: `https://mdconcierge.net/portal.html?setup=${setup}` };
 }
-async function sendPortalInvite(role, recordId, email, name) {
-  const r = await ensurePortalAccount(role, recordId, email, name);
+async function sendPortalInvite(role, recordId, email, name, practiceId) {
+  const r = await ensurePortalAccount(role, recordId, email, name, practiceId);
   if (!r) return;                       // existing account → nothing to do
   if (r.held) { console.log(`  portal invite HELD (free domain) for ${role} ${r.email} — review in dashboard.`); return; }
   const what = role === 'provider' ? 'your MDconcierge referrals' : "the cases we're coordinating for your clients";
