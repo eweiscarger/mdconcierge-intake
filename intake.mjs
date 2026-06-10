@@ -100,6 +100,7 @@ function buildLead(d, fromAddr, subject) {
   ].filter(Boolean).join(' | ');
   return {
     case_id: refId,
+    status_token: randomBytes(24).toString('hex'),
     patient_first: d.client_first ? title(d.client_first) : null,
     patient_last: d.client_last ? title(d.client_last) : null,
     patient_phone: d.client_phone ? fmtPhone(d.client_phone) : null,
@@ -189,6 +190,14 @@ function actionPills(ref){
     + items.map(([label,req])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Request: '+req+' — '+(ref||''))+'&body='+encodeURIComponent('Please coordinate '+req+' for referral '+(ref||'')+'.\n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#eef5fc;border:1px solid #b8d4ee;border-radius:12px;color:#1a2230;text-decoration:none;">${label}</a>`;}).join('')
     + '</div>';
 }
+// ── Phase H: per-party live-status portal link ──
+async function statusToken(cs) {
+  if (cs.status_token) return cs.status_token;
+  const tok = randomBytes(24).toString('hex');
+  try { if (SVC) await sbPatch(`cases?id=eq.${cs.id}`, { status_token: tok }); } catch (e) {}
+  cs.status_token = tok; return tok;
+}
+function statusBtn(tok) { return { label: '📊 View live status', href: 'https://mdconcierge.net/status.html?t=' + tok, color: '#1a2230', text: '#ffffff' }; }
 function reportPills(ref){
   const items=[['Report UR','UR'],['Report IME','IME'],['Report IRE','IRE']];
   return '<div style="margin-top:12px;border-top:1px solid #e3e6ea;padding-top:10px;"><div style="font-size:12px;color:#6b7583;margin-bottom:6px;font-weight:600;">Report a case event — one tap and we handle the deadline:</div>'
@@ -258,9 +267,11 @@ async function notifyRoutedProviders() {
       const text = await draftProviderEmail(cs, prov, recipients);
       const to = recipients.map(r => r.email).join(', ');
       const base = 'https://mdconcierge.net/respond.html?t=' + token;
+      const stok = await statusToken(cs);
       const btns = [
         { label: '✅ Accept & view case', href: base + '&a=accept', color: '#2ecc8a', text: '#06351f' },
         { label: 'Decline', href: base + '&a=decline', color: '#e0556b', text: '#ffffff' },
+        statusBtn(stok),
         mailtoBtn('Reply to coordinate', `RE ${cs.case_id}`, `Hello, regarding referral ${cs.case_id}:\n\n`),
       ];
       const subj = `New patient referral — ${cs.case_type || 'case'}${location ? (' · ' + location) : ''} (${cs.case_id})`;
@@ -457,7 +468,8 @@ async function relayAppointments() {
       let provName = '';
       if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
       const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
-      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id) + reportPills(cs.case_id)));
+      const rStok = await statusToken(cs);
+      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id) + reportPills(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
       sent++;
       console.log(`  relayed appointment to attorney for ${cs.case_id}`);
@@ -587,7 +599,9 @@ async function main() {
           try {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
-            const ackHtml = emailHtml(replyText, [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)], actionPills(payload.case_id) + reportPills(payload.case_id));
+            const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
+            if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
+            const ackHtml = emailHtml(replyText, ackBtns, actionPills(payload.case_id) + reportPills(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
             console.log(`  ↳ acknowledged ${fromAddr}`);
           } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
