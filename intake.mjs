@@ -293,7 +293,12 @@ async function followUpRouted() {
       if (recipients.length) {
         const text = await draftFollowUp(cs, prov, count);
         const btns = [];
-        if (cs.accept_token) btns.push({ label: '✅ Accept & view case', href: 'https://mdconcierge.net/respond.html?t=' + cs.accept_token + '&a=accept', color: '#2ecc8a', text: '#06351f' });
+        if (cs.accept_token) {
+          const link = 'https://mdconcierge.net/respond.html?t=' + cs.accept_token;
+          btns.push({ label: '✅ Accept & view case', href: link + '&a=accept', color: '#2ecc8a', text: '#06351f' });
+          btns.push({ label: 'Scheduled', href: link + '&a=scheduled', color: '#eef5fc', text: '#1a2230' });
+          btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#eef5fc', text: '#1a2230' });
+        }
         btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
         await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns));
       }
@@ -431,6 +436,30 @@ async function chaseGaps() {
   console.log(`Chase: sent ${sent} digest(s); escalated ${escalated} item(s) to human.`);
 }
 
+// ── Phase D: relay confirmed appointments to the attorney/firm POC ──
+async function relayAppointments() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&schedule_status=eq.scheduled&appt_relayed=is.false`); }
+  catch (e) { console.error('relay: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const cs of cases) {
+    try {
+      const emails = await resolveOwnerEmails(cs, 'attorney');
+      if (!emails.length) { await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true, notes: (cs.notes || '') + ' | APPT: scheduled but no attorney email on file to relay' }); continue; }
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      let provName = '';
+      if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
+      const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id)));
+      await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
+      sent++;
+      console.log(`  relayed appointment to attorney for ${cs.case_id}`);
+    } catch (e) { console.error(`  relay case ${cs.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Appointments relayed: ${sent}.`);
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -491,6 +520,7 @@ async function main() {
   }
   await notifyRoutedProviders();
   await followUpRouted();
+  await relayAppointments();
   await ensureGaps();
   await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
