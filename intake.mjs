@@ -189,6 +189,12 @@ function actionPills(ref){
     + items.map(([label,req])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Request: '+req+' — '+(ref||''))+'&body='+encodeURIComponent('Please coordinate '+req+' for referral '+(ref||'')+'.\n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#eef5fc;border:1px solid #b8d4ee;border-radius:12px;color:#1a2230;text-decoration:none;">${label}</a>`;}).join('')
     + '</div>';
 }
+function reportPills(ref){
+  const items=[['Report UR','UR'],['Report IME','IME'],['Report IRE','IRE']];
+  return '<div style="margin-top:12px;border-top:1px solid #e3e6ea;padding-top:10px;"><div style="font-size:12px;color:#6b7583;margin-bottom:6px;font-weight:600;">Report a case event — one tap and we handle the deadline:</div>'
+    + items.map(([label,t])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Report '+t+' — '+(ref||''))+'&body='+encodeURIComponent('Reporting a '+t+' for referral '+(ref||'')+'.\nDeadline / details: \n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#1a2230;border-radius:12px;color:#ffffff;text-decoration:none;">${label}</a>`;}).join('')
+    + '</div>';
+}
 async function sendReply(to, origSubject, text, html, inReplyTo) {
   const subject = /^re:/i.test(origSubject || '') ? origSubject : `Re: ${origSubject || 'Your referral'}`;
   await transporter.sendMail({
@@ -451,7 +457,7 @@ async function relayAppointments() {
       let provName = '';
       if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
       const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
-      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id)));
+      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id) + reportPills(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
       sent++;
       console.log(`  relayed appointment to attorney for ${cs.case_id}`);
@@ -484,6 +490,41 @@ async function emailArtifactRequests() {
   if (sent) console.log(`Artifact requests sent: ${sent}.`);
 }
 
+// ── Phase F: act on reported UR / IME / IRE events ──
+// UR -> chase the PROVIDER to get records to the reviewer by the deadline (missing = automatic denial).
+// IME / IRE -> flag the ATTORNEY (it can affect benefits); we don't have system visibility, so we surface, not advise.
+async function handleEvents() {
+  if (!SVC) return;
+  let evs = [];
+  try { evs = await sbGet(`events?select=*&status=eq.open&notified=is.false`); }
+  catch (e) { console.error('events: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const ev of evs) {
+    try {
+      const cs = (await sbGet(`cases?select=*&id=eq.${ev.case_id}`))[0];
+      if (!cs) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true }); continue; }
+      const type = String(ev.event_type || '').toUpperCase();
+      if (type === 'UR') {
+        const emails = await resolveOwnerEmails(cs, 'provider');
+        if (!emails.length) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true, note: (ev.note || '') + ' [no provider email — Eric to handle]' }); continue; }
+        const due = ev.deadline ? (' by ' + ev.deadline) : ' as soon as possible';
+        const text = `Hello,\n\nA Utilization Review (UR) has been opened on referral ${cs.case_id}. To protect the claim, the treating records and any supporting narrative need to reach the reviewer${due} — when records arrive late, the review typically results in a denial. Could you please make sure they're submitted on time? Just reply here once they're sent, or if there's anything we can do to help.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        await sendMail(emails.join(', '), `Time-sensitive — UR records due${ev.deadline ? (' ' + ev.deadline) : ''} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Confirm records sent', `UR RECORDS SENT — ${cs.case_id}`, `Records have been submitted to the reviewer for ${cs.case_id}.`)]));
+      } else { // IME / IRE -> attorney flag
+        const emails = await resolveOwnerEmails(cs, 'attorney');
+        if (!emails.length) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true, note: (ev.note || '') + ' [no attorney email — Eric to handle]' }); continue; }
+        const longName = type === 'IRE' ? 'an Impairment Rating Evaluation (IRE)' : type === 'IME' ? 'an Independent Medical Examination (IME)' : ('a ' + type);
+        const note = type === 'IRE' ? 'IREs can affect the duration of benefits, so the timing may be worth a look.' : type === 'IME' ? 'You may want to prepare your client and confirm representation at the exam.' : '';
+        const text = `Hello,\n\nFlagging for your attention: ${longName} has been reported on referral ${cs.case_id}${ev.deadline ? (' (date: ' + ev.deadline + ')') : ''}. ${note} Please let us know if there's anything you'd like us to coordinate with the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        await sendMail(emails.join(', '), `${type} reported — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${type} — ${cs.case_id}`, `Hello,\n\nRegarding the ${type} on ${cs.case_id}:\n\n`)]));
+      }
+      await sbPatch(`events?id=eq.${ev.id}`, { notified: true });
+      sent++;
+    } catch (e) { console.error(`  event ${ev.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Case events handled: ${sent}.`);
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -505,6 +546,24 @@ async function main() {
           continue;
         }
         body = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '');
+        // Phase F: a reported case event ("Report UR/IME/IRE — <ref>") -> log an event, don't create a lead
+        const repM = subject.match(/\breport\s+(UR|IME|IRE)\b/i);
+        if (repM) {
+          const type = repM[1].toUpperCase();
+          const refM = (subject + ' ' + body).match(/\b([A-Z]{2,4}-[A-Z]-\d{4}-\d+)\b/i);
+          if (refM && SVC) {
+            try {
+              const cs = (await sbGet(`cases?select=id&case_id=eq.${refM[1].toUpperCase()}`))[0];
+              if (cs) {
+                const dlM = body.match(/deadline[^:]*:\s*([^\n|]+)/i);
+                await sbPost('events', { case_id: cs.id, event_type: type, actor: 'attorney', note: 'Reported via email by ' + fromAddr, deadline: dlM ? dlM[1].trim() : null, status: 'open', notified: false });
+                console.log(`Logged ${type} event for ${refM[1]} (reported by ${fromAddr})`);
+              } else { console.log(`Report email for unknown ref ${refM[1]} — left for manual review.`); }
+            } catch (e) { console.error('  report-event log failed: ' + e.message); }
+          } else { console.log(`Report email with no case ref — "${subject}"`); }
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
         let payload, extracted = null;
         try {
           extracted = await extract(subject, fromAddr, body);
@@ -528,7 +587,7 @@ async function main() {
           try {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
-            const ackHtml = emailHtml(replyText, [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)], actionPills(payload.case_id));
+            const ackHtml = emailHtml(replyText, [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)], actionPills(payload.case_id) + reportPills(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
             console.log(`  ↳ acknowledged ${fromAddr}`);
           } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
@@ -546,6 +605,7 @@ async function main() {
   await followUpRouted();
   await relayAppointments();
   await emailArtifactRequests();
+  await handleEvents();
   await ensureGaps();
   await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
