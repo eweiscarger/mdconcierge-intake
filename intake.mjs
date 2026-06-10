@@ -629,6 +629,98 @@ async function sendSignupInvites() {
   if (sent) console.log(`Sign-up invites sent: ${sent}.`);
 }
 
+// ── Website → provider draft: fetch a practice site, extract with Claude, land it in the Sign-ups queue ──
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&#\d+;/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+async function fetchPage(url) {
+  const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MDconcierge-Importer/1.0)' }, redirect: 'follow', signal: ctrl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.text();
+  } finally { clearTimeout(to); }
+}
+function findSubpages(html, baseUrl) {
+  const out = new Set(); let base;
+  try { base = new URL(baseUrl); } catch (e) { return []; }
+  const re = /href\s*=\s*["']([^"'#]+)["']/gi; let m;
+  while ((m = re.exec(html)) && out.size < 30) {
+    let href = m[1]; if (/^(mailto:|tel:|javascript:)/i.test(href)) continue;
+    if (!/(provider|physician|doctor|our-?team|staff|locations?|offices?|services?|about|specialt|find-?a-?)/i.test(href)) continue;
+    try { const u = new URL(href, base); if (u.hostname === base.hostname) out.add(u.origin + u.pathname); } catch (e) {}
+  }
+  return [...out].filter(u => u !== baseUrl).slice(0, 4);
+}
+async function extractPractice(combinedText, url) {
+  const prompt = `You are extracting a MEDICAL PRACTICE's details from the text of its public website, to onboard them into a medical-legal coordination network. Be accurate; use "" or [] when something isn't clearly stated. Do NOT invent doctors, phone numbers, or services.
+
+Website: ${url}
+Site text (may include multiple pages):
+${combinedText.slice(0, 16000)}
+
+Return ONLY this JSON (no prose, no code fence):
+{
+ "practice": {"name":"", "specialty":"", "states":"", "address":"", "website":"${url}", "phone":""},
+ "providers": [{"doctor_name":"", "specialty":"", "provider_type":"", "phone":"", "fax":""}],
+ "contacts": [{"name":"", "role":"", "email":"", "phone":"", "receives_referrals": true}],
+ "services": [],            // e.g. "Orthopaedics","Pain Management","Physical Therapy on-site","MRI on-site","Imaging on-site","Chiropractic","Surgery"
+ "locations": [],           // office addresses if multiple
+ "confidence": "high|medium|low"
+}
+Rules: provider_type is one of Orthopaedic Surgeon, Pain Management, Physical Therapy, Chiropractic, Neurology, Imaging / Radiology, Primary Care, Podiatry, Other. List EVERY doctor you can find by name. For services, note especially if they advertise PT on-site, MRI/imaging on-site, or surgery. Put the main office phone in practice.phone and, if there's a general intake/referral email, add it as a contact with receives_referrals true.`;
+  const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1800, messages: [{ role: 'user', content: prompt }] });
+  let txt = (m.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  return JSON.parse(txt);
+}
+async function processImportJobs() {
+  if (!SVC) return;
+  let jobs = [];
+  try { jobs = await sbGet(`import_jobs?select=*&status=eq.pending&order=created_at.asc`); }
+  catch (e) { console.error('import: query failed: ' + e.message); return; }
+  for (const job of jobs) {
+    try {
+      let url = String(job.url || '').trim();
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      const mainHtml = await fetchPage(url);
+      const subs = findSubpages(mainHtml, url);
+      const texts = [htmlToText(mainHtml)];
+      for (const s of subs) { try { texts.push(htmlToText(await fetchPage(s))); } catch (e) {} }
+      const combined = texts.join('\n--- PAGE ---\n');
+      const ex = await extractPractice(combined, url);
+      const payload = {
+        practice: ex.practice || { website: url },
+        providers: Array.isArray(ex.providers) ? ex.providers.filter(d => d && d.doctor_name) : [],
+        contacts: Array.isArray(ex.contacts) ? ex.contacts.filter(c => c && (c.name || c.email)) : [],
+        services: Array.isArray(ex.services) ? ex.services : [],
+        locations: Array.isArray(ex.locations) ? ex.locations : [],
+        submitter: { name: 'Website import', email: '' },
+        source_url: url,
+      };
+      const org = (ex.practice && ex.practice.name) || url.replace(/^https?:\/\//, '').split('/')[0];
+      const sub = await sbPost('signup_submissions', {
+        type: 'provider', payload, org_name: org, submitter_email: '',
+        flagged_reason: 'Imported from website — verify details before approving',
+      });
+      // fetch the new submission id (sbPost returns minimal); look it up by org + recent
+      let subId = null;
+      try { const rows = await sbGet(`signup_submissions?select=id&org_name=eq.${encodeURIComponent(org)}&order=created_at.desc&limit=1`); subId = rows[0] && rows[0].id; } catch (e) {}
+      await sbPatch(`import_jobs?id=eq.${job.id}`, { status: 'done', submission_id: subId, result: ex, done_at: new Date().toISOString() });
+      try { await sbPost('audit_log', { case_id: null, action: 'website_imported', detail: `${org} (${(payload.providers || []).length} doctors)`, source: 'automation' }); } catch (e) {}
+      console.log(`  imported ${org} from ${url} -> submission ${subId} (${payload.providers.length} doctors)`);
+    } catch (e) {
+      await sbPatch(`import_jobs?id=eq.${job.id}`, { status: 'error', error: String(e.message || e).slice(0, 300), done_at: new Date().toISOString() });
+      console.error(`  import job ${job.id} (${job.url}) failed: ${e.message}`);
+    }
+  }
+}
+
 // ── Self-service profile edits: notify Eric (no approval) + confirm the editor ──
 async function sendProfileChangeNotices() {
   if (!SVC) return;
@@ -807,6 +899,7 @@ async function main() {
   await handleEvents();
   await sendSignupInvites();
   await sendProfileChangeNotices();
+  await processImportJobs();
   await ensureGaps();
   await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
