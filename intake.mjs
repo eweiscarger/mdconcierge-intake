@@ -36,6 +36,7 @@ Return ONLY a JSON object (no prose, no code fence):
  "is_referral": true/false,         // false if this clearly isn't a client referral (spam, newsletter, auto-reply)
  "client_first": "", "client_last": "",
  "client_phone": "", "client_email": "",
+ "client_address": "",               // full street address if stated
  "city": "", "state": "",            // state as 2-letter code if determinable
  "zip": "",
  "dob": "",                          // MM/DD/YYYY or ""
@@ -92,6 +93,7 @@ function buildLead(d, fromAddr, subject) {
     d.needs ? `Needs: ${d.needs}` : '',
     d.client_email ? `Client email: ${String(d.client_email).toLowerCase()}` : '',
     d.dob ? `Client DOB: ${d.dob}` : '',
+    d.client_address ? `Address: ${d.client_address}` : '',
     (d.city || d.state) ? `Location: ${title(d.city) || ''}, ${String(d.state||'').toUpperCase()}` : '',
     d.injury_description ? `Details: ${d.injury_description}` : '',
     needsReview ? `NEEDS REVIEW: ${[lowConf?'low confidence':'', noFirm?'confirm firm':'', thin?'sparse — verify':'', d.missing||''].filter(Boolean).join('; ')}` : '',
@@ -395,6 +397,37 @@ async function ensureGaps() {
     } catch (e) { console.error(`  gaps case ${cs.id} failed: ${e.message}`); }
   }
   if (created) console.log(`Punch list: created ${created} new gap item(s).`);
+}
+
+// ── Once we retrieve the claim details from the attorney, forward them to the provider who accepted ──
+async function forwardCompletedInfo() {
+  if (!SVC) return;
+  let cases = [];
+  // routed + provider has accepted + the essentials are now present + not yet forwarded
+  try {
+    cases = await sbGet(`cases?select=*&routed_provider_id=not.is.null&claim_info_forwarded=is.false&claim_number=not.is.null&claim_status=not.is.null&or=(provider_response.eq.accepted,status.eq.scheduled,status.eq.accepted)`);
+  } catch (e) { console.error('forward-info: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const cs of cases) {
+    try {
+      const emails = await resolveOwnerEmails(cs, 'provider');
+      if (!emails.length) { await sbPatch(`cases?id=eq.${cs.id}`, { claim_info_forwarded: true }); continue; }
+      const lines = [
+        cs.claim_number ? `Claim #: ${cs.claim_number}` : '',
+        cs.claim_status ? `Claim status: ${cs.claim_status}` : '',
+        cs.date_of_injury ? `Date of injury: ${cs.date_of_injury}` : '',
+        (cs.adjuster_name || cs.adjuster_phone) ? `Adjuster: ${[cs.adjuster_name, cs.adjuster_phone].filter(Boolean).join(' · ')}` : '',
+        cs.panel_posted ? `Panel posted: ${cs.panel_posted}` : '',
+      ].filter(Boolean).join('\n');
+      const text = `Hello,\n\nGood news — we've received the insurance/claim details for referral ${cs.case_id} from the attorney's office. Here's what you'll need for billing and authorization:\n\n${lines}\n\nPlease reply if anything else would help. Thank you for taking great care of this patient.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      await sendMail(emails.join(', '), `Claim details — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)], caseFooter(cs.case_id)));
+      await sbPatch(`cases?id=eq.${cs.id}`, { claim_info_forwarded: true });
+      await logAudit(cs.id, 'claim_info_forwarded', cs.claim_number || null);
+      sent++;
+      console.log(`  forwarded claim details to provider for ${cs.case_id}`);
+    } catch (e) { console.error(`  forward-info case ${cs.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Claim details forwarded to providers: ${sent}.`);
 }
 
 // ── Phase C: the chase — batched, escalating follow-up on open gaps ──
@@ -972,6 +1005,7 @@ async function main() {
   await sendPortalLinks();
   await processImportJobs();
   await ensureGaps();
+  await forwardCompletedInfo();
   await chaseGaps();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
