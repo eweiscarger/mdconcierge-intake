@@ -759,6 +759,29 @@ async function processImportJobs() {
   }
 }
 
+// ── Magic-link portal access: email a registered partner a passwordless sign-in link ──
+async function sendPortalLinks() {
+  if (!SVC) return;
+  let reqs = [];
+  try { reqs = await sbGet(`portal_link_requests?select=*&status=eq.pending`); }
+  catch (e) { console.error('portal-links: query failed: ' + e.message); return; }
+  for (const r of reqs) {
+    try {
+      const accts = await sbGet(`portal_accounts?select=*&id=eq.${r.account_id}&status=eq.active`);
+      const a = accts[0];
+      if (a && a.email && /@/.test(a.email)) {
+        const key = randomBytes(24).toString('hex');              // fresh key each request → prior links expire
+        await sbPatch(`portal_accounts?id=eq.${a.id}`, { login_key: key });
+        const link = 'https://mdconcierge.net/portal.html?key=' + key;
+        const text = `Hello${a.name ? (' ' + a.name) : ''},\n\nHere's your secure sign-in link for the MDconcierge portal — just click to see your cases (no password needed):\n\n${link}\n\nThis link is just for you. If you didn't request it, you can safely ignore this email.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        await sendMail(a.email, 'Your MDconcierge sign-in link', text, emailHtml(text, [{ label: '🔓 Open my portal', href: link, color: '#c8922a', text: '#1a1305' }]));
+        console.log(`  portal sign-in link sent to ${a.email}`);
+      }
+      await sbPatch(`portal_link_requests?id=eq.${r.id}`, { status: 'sent', sent_at: new Date().toISOString() });
+    } catch (e) { console.error(`  portal link ${r.id} failed: ${e.message}`); }
+  }
+}
+
 // ── Self-service profile edits: notify Eric (no approval) + confirm the editor ──
 async function sendProfileChangeNotices() {
   if (!SVC) return;
@@ -946,6 +969,7 @@ async function main() {
   await handleEvents();
   await sendSignupInvites();
   await sendProfileChangeNotices();
+  await sendPortalLinks();
   await processImportJobs();
   await ensureGaps();
   await chaseGaps();
