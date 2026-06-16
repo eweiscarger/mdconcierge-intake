@@ -209,6 +209,14 @@ function reportPills(ref){
     + items.map(([label,t])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Report '+t+' — '+(ref||''))+'&body='+encodeURIComponent('Reporting a '+t+' for referral '+(ref||'')+'.\nDeadline / details: \n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#1a2230;border-radius:12px;color:#ffffff;text-decoration:none;">${label}</a>`;}).join('')
     + '</div>';
 }
+// Standard footer on EVERY case email: action bar (requests + report) + a link to review all their cases.
+// (The case-specific magic link is the email's primary button — accept link for providers, status link for attorneys.)
+function portalLinkHtml() {
+  return '<div style="margin-top:14px;border-top:1px solid #e3e6ea;padding-top:12px;text-align:center;">'
+    + '<a href="https://mdconcierge.net/portal.html" style="color:#1a4e8a;font-weight:700;text-decoration:none;font-size:13px;">📋 Review all your cases in the MDconcierge portal</a></div>';
+}
+function caseFooter(ref) { return actionPills(ref) + reportPills(ref) + portalLinkHtml(); }
+
 async function sendReply(to, origSubject, text, html, inReplyTo) {
   const subject = /^re:/i.test(origSubject || '') ? origSubject : `Re: ${origSubject || 'Your referral'}`;
   await transporter.sendMail({
@@ -283,7 +291,7 @@ async function notifyRoutedProviders() {
         mailtoBtn('Reply to coordinate', `RE ${cs.case_id}`, `Hello, regarding referral ${cs.case_id}:\n\n`),
       ];
       const subj = `New patient referral — ${cs.case_type || 'case'}${location ? (' · ' + location) : ''} (${cs.case_id})`;
-      await sendMail(to, subj, text, emailHtml(text, btns));
+      await sendMail(to, subj, text, emailHtml(text, btns, caseFooter(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
       await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
       for (const rc of recipients) await sendPortalInvite('provider', provId, rc.email, rc.name, prov.practice_id); // first-time only; dedupes; practice-scoped
@@ -327,7 +335,7 @@ async function followUpRouted() {
           btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#eef5fc', text: '#1a2230' });
         }
         btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
-        await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns));
+        await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
       }
 
       if (count >= 3) {
@@ -449,7 +457,7 @@ async function chaseGaps() {
     const subj = nCases > 1 ? `MDconcierge — outstanding items (${nCases} cases)` : `MDconcierge — outstanding items (${Object.keys(byCase)[0]})`;
     try {
       const text = await draftChase(byCase);
-      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')]));
+      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')], portalLinkHtml()));
       for (const it of grp.items) await sbPatch(`case_gaps?id=eq.${it.g.id}`, { touches: (it.g.touches || 0) + 1, next_touch: addBusinessDays(5), updated_at: new Date().toISOString() });
       sent++;
     } catch (e) { console.error('  chase send failed: ' + e.message); }
@@ -479,7 +487,7 @@ async function relayAppointments() {
       if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
       const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
       const rStok = await statusToken(cs);
-      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], actionPills(cs.case_id) + reportPills(cs.case_id)));
+      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], caseFooter(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
       await logAudit(cs.id, 'appointment_relayed', cs.appointment_at || null);
       sent++;
@@ -505,7 +513,7 @@ async function emailArtifactRequests() {
       const recip = a.recipient === 'attorney' ? 'the attorney' : 'the provider';
       const label = a.label || a.type;
       const text = `Hello,\n\nWhen you have a moment, could you please send the ${label} for referral ${cs.case_id} directly to ${recip}? Just reply here once it's on its way and we'll note it as sent. We truly appreciate it.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
-      await sendMail(emails.join(', '), `Request: ${label} — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Confirm sent', `SENT: ${label} — ${cs.case_id}`, `We've sent the ${label} to ${recip} for ${cs.case_id}.`)]));
+      await sendMail(emails.join(', '), `Request: ${label} — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Confirm sent', `SENT: ${label} — ${cs.case_id}`, `We've sent the ${label} to ${recip} for ${cs.case_id}.`)], caseFooter(cs.case_id)));
       await sbPatch(`case_artifacts?id=eq.${a.id}`, { notified: true });
       await logAudit(a.case_id, 'artifact_requested', label);
       sent++;
@@ -533,14 +541,14 @@ async function handleEvents() {
         if (!emails.length) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true, note: (ev.note || '') + ' [no provider email — Eric to handle]' }); continue; }
         const due = ev.deadline ? (' by ' + ev.deadline) : ' as soon as possible';
         const text = `Hello,\n\nA Utilization Review (UR) has been opened on referral ${cs.case_id}. To protect the claim, the treating records and any supporting narrative need to reach the reviewer${due} — when records arrive late, the review typically results in a denial. Could you please make sure they're submitted on time? Just reply here once they're sent, or if there's anything we can do to help.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
-        await sendMail(emails.join(', '), `Time-sensitive — UR records due${ev.deadline ? (' ' + ev.deadline) : ''} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Confirm records sent', `UR RECORDS SENT — ${cs.case_id}`, `Records have been submitted to the reviewer for ${cs.case_id}.`)]));
+        await sendMail(emails.join(', '), `Time-sensitive — UR records due${ev.deadline ? (' ' + ev.deadline) : ''} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Confirm records sent', `UR RECORDS SENT — ${cs.case_id}`, `Records have been submitted to the reviewer for ${cs.case_id}.`)], caseFooter(cs.case_id)));
       } else { // IME / IRE -> attorney flag
         const emails = await resolveOwnerEmails(cs, 'attorney');
         if (!emails.length) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true, note: (ev.note || '') + ' [no attorney email — Eric to handle]' }); continue; }
         const longName = type === 'IRE' ? 'an Impairment Rating Evaluation (IRE)' : type === 'IME' ? 'an Independent Medical Examination (IME)' : ('a ' + type);
         const note = type === 'IRE' ? 'IREs can affect the duration of benefits, so the timing may be worth a look.' : type === 'IME' ? 'You may want to prepare your client and confirm representation at the exam.' : '';
         const text = `Hello,\n\nFlagging for your attention: ${longName} has been reported on referral ${cs.case_id}${ev.deadline ? (' (date: ' + ev.deadline + ')') : ''}. ${note} Please let us know if there's anything you'd like us to coordinate with the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
-        await sendMail(emails.join(', '), `${type} reported — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${type} — ${cs.case_id}`, `Hello,\n\nRegarding the ${type} on ${cs.case_id}:\n\n`)]));
+        await sendMail(emails.join(', '), `${type} reported — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${type} — ${cs.case_id}`, `Hello,\n\nRegarding the ${type} on ${cs.case_id}:\n\n`)], caseFooter(cs.case_id)));
       }
       await sbPatch(`events?id=eq.${ev.id}`, { notified: true });
       await logAudit(cs.id, 'event_' + type + '_actioned', ev.deadline || null);
@@ -586,7 +594,7 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
     to: recipients.join(', '),
     subject: `Documents for referral ${cs.case_id}`,
     text: note,
-    html: emailHtml(note, [mailtoBtn('Acknowledge receipt', `RECEIVED: ${cs.case_id}`, `We've received the documents for ${cs.case_id}.`)]),
+    html: emailHtml(note, [mailtoBtn('Acknowledge receipt', `RECEIVED: ${cs.case_id}`, `We've received the documents for ${cs.case_id}.`)], caseFooter(cs.case_id)),
     attachments,
     headers: { 'X-MDC-Auto': 'forward' },
   });
@@ -916,7 +924,7 @@ async function main() {
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
-            const ackHtml = emailHtml(replyText, ackBtns, actionPills(payload.case_id) + reportPills(payload.case_id));
+            const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
             console.log(`  ↳ acknowledged ${fromAddr}`);
             await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact); // first-time only; free domains held
