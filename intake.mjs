@@ -261,6 +261,32 @@ Rules: warm, gracious, concise (~80-100 words). Invite them to review and accept
   } catch (e) { console.error('  provider draft failed, using template: ' + e.message); }
   return `Hello,\n\nWe have a new ${cs.case_type || ''} patient referral${location ? (' in ' + location) : ''} we'd be grateful to coordinate with your office (reference ${cs.case_id || 'N/A'}). Injury / area: ${cs.injury_type || 'details on acceptance'}. The patient is represented by counsel.\n\nPlease review and accept below to unlock the full patient details and EHR / case-management import.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
 }
+// ── In-network referrals: when a provider/attorney sends a patient onward, the NEW provider is
+// notified by notifyRoutedProviders (it's a routed child case); here we FYI the attorney so all are looped in. ──
+async function announceInNetworkReferrals() {
+  if (!SVC) return;
+  let kids = [];
+  try { kids = await sbGet(`cases?select=*&parent_case_id=not.is.null&referral_announced=is.false`); }
+  catch (e) { console.error('announce: query failed: ' + e.message); return; }
+  for (const cs of kids) {
+    try {
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      const svc = cs.service_label || 'additional care';
+      let provName = '';
+      if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
+      const attyEmails = await resolveOwnerEmails(cs, 'attorney');
+      if (attyEmails.length) {
+        const stok = await statusToken(cs);
+        const text = `Hello,\n\nKeeping you in the loop: ${patient} has been referred within the MDconcierge network${provName ? (' to ' + provName) : ''} for ${svc} (reference ${cs.case_id}). Our team is coordinating it and we'll keep you posted.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        await sendMail(attyEmails.join(', '), `New in-network referral — ${patient} · ${svc} (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)));
+      }
+      await sbPatch(`cases?id=eq.${cs.id}`, { referral_announced: true });
+      await logAudit(cs.id, 'in_network_referral_announced', provName || cs.service_label || null);
+      console.log(`  announced in-network referral ${cs.case_id} (${svc}) to attorney`);
+    } catch (e) { console.error(`  announce referral ${cs.id} failed: ${e.message}`); }
+  }
+}
+
 async function notifyRoutedProviders() {
   if (!SVC) { console.log('No service key set; skipping provider notifications.'); return; }
   let cases = [];
@@ -1026,6 +1052,7 @@ async function main() {
     lock.release();
     await client.logout();
   }
+  await announceInNetworkReferrals();
   await notifyRoutedProviders();
   await followUpRouted();
   await relayAppointments();
