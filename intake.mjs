@@ -530,6 +530,37 @@ async function relayAppointments() {
   if (sent) console.log(`Appointments relayed: ${sent}.`);
 }
 
+// ── "Ring the bell": provider's office can't reach / hasn't scheduled the patient -> alert the attorney ──
+// We can't schedule (we don't see their calendar), but we relay the failure to the party who can fix it.
+async function escalateUnreachable() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&schedule_status=in.(pending,unable)&unreachable_relayed=is.false`); }
+  catch (e) { console.error('unreachable: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const cs of cases) {
+    try {
+      const emails = await resolveOwnerEmails(cs, 'attorney');
+      let provName = '';
+      if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      const office = provName || "the provider's office";
+      if (!emails.length) {
+        await sbPatch(`cases?id=eq.${cs.id}`, { unreachable_relayed: true, status: 'escalated', notes: (cs.notes || '') + ` | UNREACHABLE: ${office} can't reach patient to schedule — no attorney email to relay` });
+        continue;
+      }
+      const why = cs.schedule_status === 'unable' ? `${office} has been unable to reach your client to schedule` : `${office} is trying to reach your client to schedule but hasn't connected yet`;
+      const text = `Hello,\n\nA quick heads-up on referral ${cs.case_id}: ${why} (${patient}). Could you please ask ${patient} to call the office, or reply with the best phone number and time to reach them? We'd like to get this scheduled and keep the treatment moving.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      await sendMail(emails.join(', '), `Action needed — can't reach your client to schedule (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply with the best number', `RE ${cs.case_id} — scheduling`, `Hello,\n\nBest way to reach ${patient}:\n\n`)], caseFooter(cs.case_id)));
+      await sbPatch(`cases?id=eq.${cs.id}`, { unreachable_relayed: true, status: 'escalated' });
+      await logAudit(cs.id, 'unreachable_escalated', cs.schedule_status);
+      sent++;
+      console.log(`  rang the bell: can't-reach relayed to attorney for ${cs.case_id}`);
+    } catch (e) { console.error(`  unreachable case ${cs.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Unreachable-patient escalations: ${sent}.`);
+}
+
 // ── Phase E: email artifact requests to the holder (records/bills/narratives — tracking only, never the doc) ──
 async function emailArtifactRequests() {
   if (!SVC) return;
@@ -998,6 +1029,7 @@ async function main() {
   await notifyRoutedProviders();
   await followUpRouted();
   await relayAppointments();
+  await escalateUnreachable();
   await emailArtifactRequests();
   await handleEvents();
   await sendSignupInvites();
