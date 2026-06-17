@@ -236,6 +236,11 @@ async function sendMail(to, subject, text, html) {
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
 const SVC = process.env.SUPABASE_SERVICE_KEY;
 const ACCEPT_TTL_DAYS = 14, STATUS_TTL_DAYS = 30, PORTAL_SETUP_TTL_DAYS = 14; // magic-link / invite lifetimes
+const ADMIN_EMAIL = 'eric@mdconcierge.net'; // where engine alerts/heartbeats go
+// capture every console.error this run so we can alert Eric instead of failing silently
+const RUN_ERRORS = [];
+const _origErr = console.error;
+console.error = (...a) => { try { RUN_ERRORS.push(a.map(String).join(' ')); } catch (e) {} _origErr(...a); };
 function daysFromNow(n){ return new Date(Date.now() + n*86400000).toISOString(); }
 async function logAudit(caseId, action, detail){ if(!SVC||!caseId)return; try{ await sbPost('audit_log', { case_id: caseId, action, detail: detail||null, source: 'automation' }); }catch(e){} }
 function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
@@ -971,6 +976,29 @@ async function sendPortalInvite(role, recordId, email, name, practiceId) {
   } catch (e) { console.error('  portal invite send failed: ' + e.message); }
 }
 
+// ── Monitoring: heartbeat + alert Eric on errors, so the engine never fails silently ──
+async function healthReport() {
+  if (!SVC) return;
+  const today = new Date().toISOString().slice(0, 10);
+  let row = null;
+  try { row = (await sbGet(`system_health?select=*&id=eq.1`))[0]; } catch (e) {}
+  try {
+    if (row) await sbPatch(`system_health?id=eq.1`, { last_run_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    else await sbPost('system_health', { id: 1, last_run_at: new Date().toISOString() });
+  } catch (e) {}
+  // alert on any errors this run
+  if (RUN_ERRORS.length) {
+    const body = `The MDconcierge coordination engine hit ${RUN_ERRORS.length} issue(s) on its last run (${new Date().toUTCString()}):\n\n- ${RUN_ERRORS.slice(0, 25).join('\n- ')}\n\nThe engine keeps running — this is a heads-up so nothing slips by unnoticed.`;
+    try { await sendMail(ADMIN_EMAIL, `⚠ MDconcierge engine: ${RUN_ERRORS.length} issue(s) this run`, body, emailHtml(body, [])); } catch (e) {}
+  }
+  // once-a-day "still alive" confirmation (dead-man's switch: if these stop, something's wrong)
+  if (!row || row.last_heartbeat_date !== today) {
+    const t = `✓ Your MDconcierge coordination engine is running normally (checked ${new Date().toUTCString()}). No action needed — this is your daily health confirmation. If you ever STOP getting this, the engine may be down and worth a look.`;
+    try { await sendMail(ADMIN_EMAIL, '✓ MDconcierge engine — daily health check', t, emailHtml(t, [])); } catch (e) {}
+    try { await sbPatch(`system_health?id=eq.1`, { last_heartbeat_date: today }); } catch (e) {}
+  }
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -1100,7 +1128,15 @@ async function main() {
   await ensureGaps();
   await forwardCompletedInfo();
   await chaseGaps();
+  await healthReport();
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
-main().catch(e => { console.error('Fatal:', e); process.exit(1); });
+main().catch(async (e) => {
+  try {
+    const body = 'The MDconcierge coordination engine crashed on its last run:\n\n' + (e && e.stack ? e.stack : (e && e.message) || String(e)) + '\n\nIt will retry on the next cycle. If these keep coming, it needs a look.';
+    await sendMail(ADMIN_EMAIL, '🚨 MDconcierge engine — FATAL error', body, emailHtml(body, []));
+  } catch (_) {}
+  console.error('Fatal:', e);
+  process.exit(1);
+});

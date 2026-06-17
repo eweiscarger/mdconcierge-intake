@@ -1,0 +1,24 @@
+name: Keepalive
+# Scheduled GitHub workflows auto-pause after 60 days of no repo activity.
+# This commits a weekly heartbeat so the referral-intake cron is never disabled.
+on:
+  schedule:
+    - cron: '17 8 * * 1'   # weekly, Monday 08:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Touch heartbeat and commit
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .keepalive
+          git config user.name "mdconcierge-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add .keepalive
+          git commit -m "keepalive: weekly activity to keep the cron alive" || echo "nothing to commit"
+          git push
