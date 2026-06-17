@@ -44,6 +44,7 @@ Return ONLY a JSON object (no prose, no code fence):
  "injury_description": "",
  "needs": "",                        // what the client needs (medical provider, imaging, surgery, funding, etc.)
  "claim_number": "",                 // WC/PI claim number if stated
+ "has_backup_insurance": "",         // does the client have backup/health insurance? "yes" / "no" / "" if not stated
  "claim_status": "",                 // NCP / TNCP / NCD / litigated / accepted / denied / unknown
  "date_of_injury": "",               // as stated; may be vague or ""
  "date_first_treatment": "",         // as stated or ""
@@ -94,6 +95,7 @@ function buildLead(d, fromAddr, subject) {
     d.client_email ? `Client email: ${String(d.client_email).toLowerCase()}` : '',
     d.dob ? `Client DOB: ${d.dob}` : '',
     d.client_address ? `Address: ${d.client_address}` : '',
+    d.has_backup_insurance ? `Backup insurance: ${/^y/i.test(d.has_backup_insurance) ? 'Yes' : 'No'}` : '',
     (d.city || d.state) ? `Location: ${title(d.city) || ''}, ${String(d.state||'').toUpperCase()}` : '',
     d.injury_description ? `Details: ${d.injury_description}` : '',
     needsReview ? `NEEDS REVIEW: ${[lowConf?'low confidence':'', noFirm?'confirm firm':'', thin?'sparse — verify':'', d.missing||''].filter(Boolean).join('; ')}` : '',
