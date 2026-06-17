@@ -292,16 +292,23 @@ async function announceInNetworkReferrals() {
 async function notifyRoutedProviders() {
   if (!SVC) { console.log('No service key set; skipping provider notifications.'); return; }
   let cases = [];
-  try { cases = await sbGet(`cases?select=*&status=eq.routed&provider_notified=is.false&routed_provider_id=not.is.null`); }
+  try { cases = await sbGet(`cases?select=*&status=eq.routed&provider_notified=is.false&or=(routed_provider_id.not.is.null,routed_practice_id.not.is.null)`); }
   catch (e) { console.error('notify: cases query failed: ' + e.message); return; }
   console.log(`Provider notifications: ${cases.length} routed case(s) pending.`);
   for (const cs of cases) {
     try {
-      const provId = cs.routed_provider_id;
-      const provs = await sbGet(`providers?select=*&id=eq.${provId}`);
-      const prov = provs[0];
-      if (!prov) { await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true }); continue; }
-      const contacts = await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&or=(provider_id.eq.${provId},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`);
+      let prov, contacts, provId = cs.routed_provider_id;
+      if (provId) {
+        const provs = await sbGet(`providers?select=*&id=eq.${provId}`); prov = provs[0];
+        if (!prov) { await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true }); continue; }
+        contacts = await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&or=(provider_id.eq.${provId},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`);
+      } else {
+        const pracId = cs.routed_practice_id;
+        const pracs = await sbGet(`practices?select=name&id=eq.${pracId}`);
+        if (!pracs[0]) { await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true }); continue; }
+        prov = { doctor_name: pracs[0].name, practice_id: pracId };   // route to the PRACTICE; admins pick who treats on accept
+        contacts = await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&practice_id=eq.${pracId}`);
+      }
       const recipients = (contacts || []).filter(c => c.email && /@/.test(c.email));
       if (!recipients.length) {
         console.log(`  case ${cs.case_id}: provider "${prov.doctor_name}" has no referral-contact email — marking notified, flag for manual follow-up.`);
@@ -530,6 +537,30 @@ async function chaseGaps() {
     try { await sbPatch(`case_gaps?id=eq.${g.id}`, { status: 'escalated', next_touch: null, updated_at: new Date().toISOString() }); escalated++; } catch (e) {}
   }
   console.log(`Chase: sent ${sent} digest(s); escalated ${escalated} item(s) to human.`);
+}
+
+// ── When a practice picks who's treating, relay that to the attorney ──
+async function relayTreatingProvider() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&treating_provider_id=not.is.null&treating_relayed=is.false`); }
+  catch (e) { console.error('treating-relay: query failed: ' + e.message); return; }
+  for (const cs of cases) {
+    try {
+      const prov = (await sbGet(`providers?select=doctor_name&id=eq.${cs.treating_provider_id}`))[0];
+      const provName = prov ? prov.doctor_name : 'the assigned provider';
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      const emails = await resolveOwnerEmails(cs, 'attorney');
+      if (emails.length) {
+        const stok = await statusToken(cs);
+        const text = `Hello,\n\nUpdate on referral ${cs.case_id}: ${patient} will be treated by ${provName}. We'll keep coordinating and relay the appointment once it's scheduled.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        await sendMail(emails.join(', '), `Treating provider assigned — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)));
+      }
+      await sbPatch(`cases?id=eq.${cs.id}`, { treating_relayed: true });
+      await logAudit(cs.id, 'treating_provider_relayed', provName);
+      console.log(`  relayed treating provider (${provName}) to attorney for ${cs.case_id}`);
+    } catch (e) { console.error(`  treating relay ${cs.id} failed: ${e.message}`); }
+  }
 }
 
 // ── Phase D: relay confirmed appointments to the attorney/firm POC ──
@@ -1058,6 +1089,7 @@ async function main() {
   await notifyRoutedProviders();
   await followUpRouted();
   await relayAppointments();
+  await relayTreatingProvider();
   await escalateUnreachable();
   await emailArtifactRequests();
   await handleEvents();
