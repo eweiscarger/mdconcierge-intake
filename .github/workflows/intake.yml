@@ -1,23 +1,32 @@
 name: Referral intake
+# Self-sustaining loop: one run processes the inbox every ~90s for ~54 minutes,
+# then re-launches itself so coverage is continuous. A 30-min schedule is a backstop
+# that restarts the loop if the chain is ever broken. GitHub's plain cron is too
+# delayed (hours) to rely on for a live coordination service, so we don't.
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/30 * * * *'   # backstop only — restarts the loop if it ever dies
 
 concurrency:
   group: referral-intake
-  cancel-in-progress: false
+  cancel-in-progress: true   # keep exactly ONE loop alive; newest run wins
+
+permissions:
+  contents: read
+  actions: write             # lets the run re-launch itself
 
 jobs:
   intake:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - run: npm install --no-audit --no-fund
-      - run: node intake.mjs
+      - name: Process inbox on a ~90s loop for ~54 minutes
         env:
           ZOHO_USER: ${{ secrets.ZOHO_USER }}
           ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
@@ -25,3 +34,14 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          END=$((SECONDS+3240))   # 54 minutes
+          while [ $SECONDS -lt $END ]; do
+            node intake.mjs || echo "intake pass errored (continuing loop)"
+            sleep 90
+          done
+      - name: Re-launch the loop (continuous coverage)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run intake.yml --repo "$GITHUB_REPOSITORY" || echo "re-launch will fall back to the schedule backstop"
