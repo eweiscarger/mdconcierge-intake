@@ -197,24 +197,47 @@ Rules:
 - Include the reference number.
 - If information is still needed, politely and graciously ask them to reply with those specific items.
 - Do NOT give legal or medical advice. Do NOT promise specific timelines, outcomes, or guarantees.
-- End with "With gratitude," on one line, then "The MDconcierge Coordination Team" on the next.
+- Do NOT add any sign-off, closing, or signature — end after your final sentence. A personal signature from Eric Weiscarger is appended automatically.
 Return ONLY the email body text (no subject line).`;
     const msg = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content: prompt }] });
     const t = (msg.content?.[0]?.text || '').trim();
     if (t) return t;
-  } catch (e) { console.error('  ↳ AI draft failed, using template: ' + e.message); }
+  } catch (e) { console.error('  ↳ personalized draft unavailable, using template: ' + e.message); }
   const ask = missing ? ` When you have a moment, could you kindly reply with the following so we can move quickly: ${missing}.` : ' We will be in touch shortly with next steps.';
-  return `Hello${contact ? ' ' + contact : ''},\n\nThank you so much for your referral — we are truly grateful you thought of MDconcierge. We have received it for ${clientName} (reference ${refId}), and our coordination team is already getting to work.${ask}\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello${contact ? ' ' + contact : ''},\n\nThank you so much for your referral — we are truly grateful you thought of MDconcierge. We have received it for ${clientName} (reference ${refId}), and our coordination team is already getting to work.${ask}`;
 }
 
 function escEmail(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+// ── Eric's personal sign-off on every outgoing email (text + branded HTML w/ logo). ──
+const ERIC_CELL = '(570) 817-7569';   // Eric's cell
+const ERIC_CELL_DIGITS = ERIC_CELL.replace(/\D/g, '');
+function signatureText(){
+  return `\n\nWarm regards,\nEric Weiscarger\nFounder, MDconcierge`
+    + (ERIC_CELL ? `\nCell: ${ERIC_CELL}` : '')
+    + `\nReferrals & documents: referrals@mdconcierge.net\nmdconcierge.net`;
+}
+function signatureHtml(){
+  return `<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e3e6ea;font-family:Arial,Helvetica,sans-serif;">`
+    + `<div style="font-size:14px;color:#1a2230;margin-bottom:12px;">Warm regards,</div>`
+    + `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr>`
+    + `<td style="vertical-align:middle;padding-right:14px;"><img src="https://mdconcierge.net/logo.jpg" alt="MDconcierge" width="54" height="54" style="display:block;border-radius:8px;"></td>`
+    + `<td style="vertical-align:middle;border-left:3px solid #c8922a;padding-left:14px;">`
+    +   `<div style="font-size:16px;font-weight:bold;color:#0f1e3d;">Eric Weiscarger</div>`
+    +   `<div style="font-size:11px;font-weight:bold;letter-spacing:1px;color:#6B9FD4;">FOUNDER &middot; MDCONCIERGE</div>`
+    +   `<div style="font-size:12px;color:#444;line-height:1.7;margin-top:6px;">`
+    +     (ERIC_CELL ? `&#128241; <a href="tel:${ERIC_CELL_DIGITS}" style="color:#0f1e3d;text-decoration:none;">${ERIC_CELL}</a><br>` : '')
+    +     `&#9993; <a href="mailto:referrals@mdconcierge.net" style="color:#0f1e3d;text-decoration:none;">referrals@mdconcierge.net</a><br>`
+    +     `&#127760; <a href="https://mdconcierge.net" style="color:#c8922a;text-decoration:none;font-weight:bold;">mdconcierge.net</a>`
+    +   `</div>`
+    + `</td></tr></table></div>`;
+}
 function emailHtml(bodyText, buttons, extra){
   const para='<p style="margin:0 0 14px;">'+escEmail(bodyText).replace(/\n\n+/g,'</p><p style="margin:0 0 14px;">').replace(/\n/g,'<br>')+'</p>';
   const btns=(buttons&&buttons.length)?('<div style="margin-top:6px;">'+buttons.map(b=>`<a href="${b.href}" style="display:inline-block;padding:11px 20px;margin:6px 10px 6px 0;background:${b.color};color:${b.text};text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;">${escEmail(b.label)}</a>`).join('')+'</div>'):'';
   return `<!doctype html><html><body style="margin:0;background:#f4f5f7;font-family:'Segoe UI',Arial,sans-serif;">`
     +`<div style="max-width:560px;margin:0 auto;padding:22px;">`
     +`<div style="background:#0b0f14;border-radius:12px 12px 0 0;padding:18px 24px;"><span style="font-size:20px;font-weight:800;color:#ffffff;">MD<span style="color:#c8922a;">concierge</span></span><div style="color:#8e97a3;font-size:12px;margin-top:2px;">Medical-Legal Coordination</div></div>`
-    +`<div style="background:#ffffff;border:1px solid #e3e6ea;border-top:none;border-radius:0 0 12px 12px;padding:22px 24px;color:#1a2230;font-size:14px;line-height:1.6;">${para}${btns}${extra||''}</div>`
+    +`<div style="background:#ffffff;border:1px solid #e3e6ea;border-top:none;border-radius:0 0 12px 12px;padding:22px 24px;color:#1a2230;font-size:14px;line-height:1.6;">${para}${btns}${extra||''}${signatureHtml()}</div>`
     +`<div style="text-align:center;color:#9aa3af;font-size:11px;padding:14px;">MDconcierge &middot; referrals@mdconcierge.net</div>`
     +`</div></body></html>`;
 }
@@ -254,13 +277,14 @@ function caseFooter(ref) { return actionPills(ref) + reportPills(ref) + portalLi
 async function sendReply(to, origSubject, text, html, inReplyTo) {
   const subject = /^re:/i.test(origSubject || '') ? origSubject : `Re: ${origSubject || 'Your referral'}`;
   await transporter.sendMail({
-    from: `MDconcierge Coordination <${ZOHO_USER}>`,
-    to, subject, text, html,
+    from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`,
+    replyTo: `MDconcierge <${ZOHO_USER}>`,
+    to, subject, text: text + signatureText(), html,
     headers: Object.assign({ 'X-MDC-Auto': 'ack' }, inReplyTo ? { 'In-Reply-To': inReplyTo, 'References': inReplyTo } : {}),
   });
 }
 async function sendMail(to, subject, text, html) {
-  await transporter.sendMail({ from: `MDconcierge Coordination <${ZOHO_USER}>`, to, subject, text, html, headers: { 'X-MDC-Auto': 'notify' } });
+  await transporter.sendMail({ from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`, replyTo: `MDconcierge <${ZOHO_USER}>`, to, subject, text: text + signatureText(), html, headers: { 'X-MDC-Auto': 'notify' } });
 }
 
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
@@ -292,11 +316,11 @@ Case type: ${cs.case_type || 'injury'}
 Injury / area: ${cs.injury_type || 'see details'}
 General location: ${location || '(unlocks on acceptance)'}
 Reference: ${cs.case_id || ''}
-Rules: warm, gracious, concise (~80-100 words). Invite them to review and accept; explain that full patient details and EHR/case-management import unlock once they accept. The patient is represented by counsel. No medical/legal advice, NO patient name, NO contact info. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+Rules: warm, gracious, concise (~80-100 words). Invite them to review and accept; explain that full patient details and EHR/case-management import unlock once they accept. The patient is represented by counsel. No medical/legal advice, NO patient name, NO contact info. Do NOT add any sign-off, closing, or signature — end after your final sentence (a personal signature is appended automatically). Return only the body text.`;
     const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 350, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  provider draft failed, using template: ' + e.message); }
-  return `Hello,\n\nWe have a new ${cs.case_type || ''} patient referral${location ? (' in ' + location) : ''} we'd be grateful to coordinate with your office (reference ${cs.case_id || 'N/A'}). Injury / area: ${cs.injury_type || 'details on acceptance'}. The patient is represented by counsel.\n\nPlease review and accept below to unlock the full patient details and EHR / case-management import.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello,\n\nWe have a new ${cs.case_type || ''} patient referral${location ? (' in ' + location) : ''} we'd be grateful to coordinate with your office (reference ${cs.case_id || 'N/A'}). Injury / area: ${cs.injury_type || 'details on acceptance'}. The patient is represented by counsel.\n\nPlease review and accept below to unlock the full patient details and EHR / case-management import.`;
 }
 // ── In-network referrals: when a provider/attorney sends a patient onward, the NEW provider is
 // notified by notifyRoutedProviders (it's a routed child case); here we FYI the attorney so all are looped in. ──
@@ -314,7 +338,7 @@ async function announceInNetworkReferrals() {
       const attyEmails = await resolveOwnerEmails(cs, 'attorney');
       if (attyEmails.length) {
         const stok = await statusToken(cs);
-        const text = `Hello,\n\nKeeping you in the loop: ${patient} has been referred within the MDconcierge network${provName ? (' to ' + provName) : ''} for ${svc} (reference ${cs.case_id}). Our team is coordinating it and we'll keep you posted.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        const text = `Hello,\n\nKeeping you in the loop: ${patient} has been referred within the MDconcierge network${provName ? (' to ' + provName) : ''} for ${svc} (reference ${cs.case_id}). Our team is coordinating it and we'll keep you posted.`;
         await sendMail(attyEmails.join(', '), `New in-network referral — ${patient} · ${svc} (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)));
       }
       await sbPatch(`cases?id=eq.${cs.id}`, { referral_announced: true });
@@ -377,11 +401,11 @@ async function draftFollowUp(cs, prov, count) {
     const prompt = `Write a brief, very polite and gracious FOLLOW-UP email to a medical provider's office, gently checking on a patient referral from MDconcierge. This is reminder #${count} of up to 3 — keep it light and no-pressure. IMPORTANT: do NOT include any patient name or contact info (pre-acceptance); refer to it only by the reference number.
 Provider: ${prov.doctor_name}
 Reference: ${cs.case_id || ''}
-Rules: warm, gracious, light-touch (~70-90 words). Politely ask whether they've had a chance to review/accept the referral, or if there's anything MDconcierge can help with. No medical/legal advice, no patient name, no PII. Include the reference. End "With gratitude," then "The MDconcierge Coordination Team". Return only the body.`;
+Rules: warm, gracious, light-touch (~70-90 words). Politely ask whether they've had a chance to review/accept the referral, or if there's anything MDconcierge can help with. No medical/legal advice, no patient name, no PII. Include the reference. Do NOT add any sign-off, closing, or signature — end after your final sentence (a personal signature is appended automatically). Return only the body.`;
     const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  follow-up draft failed: ' + e.message); }
-  return `Hello,\n\nJust a gentle note about referral ${cs.case_id || 'N/A'} — whenever convenient, we'd be grateful to know if you've had a chance to review and accept it, or if there's anything MDconcierge can help with.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello,\n\nJust a gentle note about referral ${cs.case_id || 'N/A'} — whenever convenient, we'd be grateful to know if you've had a chance to review and accept it, or if there's anything MDconcierge can help with.`;
 }
 async function followUpRouted() {
   if (!SVC) return;
@@ -489,7 +513,7 @@ async function forwardCompletedInfo() {
         (cs.adjuster_name || cs.adjuster_phone) ? `Adjuster: ${[cs.adjuster_name, cs.adjuster_phone].filter(Boolean).join(' · ')}` : '',
         cs.panel_posted ? `Panel posted: ${cs.panel_posted}` : '',
       ].filter(Boolean).join('\n');
-      const text = `Hello,\n\nGood news — we've received the insurance/claim details for referral ${cs.case_id} from the attorney's office. Here's what you'll need for billing and authorization:\n\n${lines}\n\nPlease reply if anything else would help. Thank you for taking great care of this patient.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      const text = `Hello,\n\nGood news — we've received the insurance/claim details for referral ${cs.case_id} from the attorney's office. Here's what you'll need for billing and authorization:\n\n${lines}\n\nPlease reply if anything else would help. Thank you for taking great care of this patient.`;
       await sendMail(emails.join(', '), `Claim details — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)], caseFooter(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { claim_info_forwarded: true });
       await logAudit(cs.id, 'claim_info_forwarded', cs.claim_number || null);
@@ -525,11 +549,11 @@ async function draftChase(byCase) {
     const prompt = `Write a brief, warm, professional follow-up email from MDconcierge (medical-legal coordination) gently requesting the outstanding items we still need to keep the case(s) moving. Batch everything into ONE message.
 Outstanding by case:
 ${lines}
-Rules: warm, brief, appreciative; no guilt or manufactured urgency. Present the asks as a tight bulleted list grouped by case reference. One clear reply path (just reply to this email). No legal/medical advice. Reference cases by their reference code only — NO patient names or PII. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+Rules: warm, brief, appreciative; no guilt or manufactured urgency. Present the asks as a tight bulleted list grouped by case reference. One clear reply path (just reply to this email). No legal/medical advice. Reference cases by their reference code only — NO patient names or PII. Do NOT add any sign-off, closing, or signature — end after your final sentence (a personal signature is appended automatically). Return only the body text.`;
     const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 450, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  chase draft failed: ' + e.message); }
-  return `Hello,\n\nA quick follow-up on the items we still need to keep things moving:\n\n${lines}\n\nWhenever convenient, just reply with whatever you have — no rush, and thank you.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello,\n\nA quick follow-up on the items we still need to keep things moving:\n\n${lines}\n\nWhenever convenient, just reply with whatever you have — no rush, and thank you.`;
 }
 async function chaseGaps() {
   if (!SVC) return;
@@ -588,7 +612,7 @@ async function relayTreatingProvider() {
       const emails = await resolveOwnerEmails(cs, 'attorney');
       if (emails.length) {
         const stok = await statusToken(cs);
-        const text = `Hello,\n\nUpdate on referral ${cs.case_id}: ${patient} will be treated by ${provName}. We'll keep coordinating and relay the appointment once it's scheduled.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        const text = `Hello,\n\nUpdate on referral ${cs.case_id}: ${patient} will be treated by ${provName}. We'll keep coordinating and relay the appointment once it's scheduled.`;
         await sendMail(emails.join(', '), `Treating provider assigned — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)));
       }
       await sbPatch(`cases?id=eq.${cs.id}`, { treating_relayed: true });
@@ -612,7 +636,7 @@ async function relayAppointments() {
       const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
       let provName = '';
       if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
-      const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.`;
       const rStok = await statusToken(cs);
       await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], caseFooter(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
@@ -644,7 +668,7 @@ async function escalateUnreachable() {
         continue;
       }
       const why = cs.schedule_status === 'unable' ? `${office} has been unable to reach your client to schedule` : `${office} is trying to reach your client to schedule but hasn't connected yet`;
-      const text = `Hello,\n\nA quick heads-up on referral ${cs.case_id}: ${why} (${patient}). Could you please ask ${patient} to call the office, or reply with the best phone number and time to reach them? We'd like to get this scheduled and keep the treatment moving.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      const text = `Hello,\n\nA quick heads-up on referral ${cs.case_id}: ${why} (${patient}). Could you please ask ${patient} to call the office, or reply with the best phone number and time to reach them? We'd like to get this scheduled and keep the treatment moving.`;
       await sendMail(emails.join(', '), `Action needed — can't reach your client to schedule (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply with the best number', `RE ${cs.case_id} — scheduling`, `Hello,\n\nBest way to reach ${patient}:\n\n`)], caseFooter(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { unreachable_relayed: true, status: 'escalated' });
       await logAudit(cs.id, 'unreachable_escalated', cs.schedule_status);
@@ -670,7 +694,7 @@ async function emailArtifactRequests() {
       if (!emails.length) continue; // hold until we can reach the holder
       const recip = a.recipient === 'attorney' ? 'the attorney' : 'the provider';
       const label = a.label || a.type;
-      const text = `Hello,\n\nWhen you have a moment, could you please send the ${label} for referral ${cs.case_id} directly to ${recip}? Just reply here once it's on its way and we'll note it as sent. We truly appreciate it.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+      const text = `Hello,\n\nWhen you have a moment, could you please send the ${label} for referral ${cs.case_id} directly to ${recip}? Just reply here once it's on its way and we'll note it as sent. We truly appreciate it.`;
       await sendMail(emails.join(', '), `Request: ${label} — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Confirm sent', `SENT: ${label} — ${cs.case_id}`, `We've sent the ${label} to ${recip} for ${cs.case_id}.`)], caseFooter(cs.case_id)));
       await sbPatch(`case_artifacts?id=eq.${a.id}`, { notified: true });
       await logAudit(a.case_id, 'artifact_requested', label);
@@ -698,14 +722,14 @@ async function handleEvents() {
         const emails = await resolveOwnerEmails(cs, 'provider');
         if (!emails.length) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true, note: (ev.note || '') + ' [no provider email — Eric to handle]' }); continue; }
         const due = ev.deadline ? (' by ' + ev.deadline) : ' as soon as possible';
-        const text = `Hello,\n\nA Utilization Review (UR) has been opened on referral ${cs.case_id}. To protect the claim, the treating records and any supporting narrative need to reach the reviewer${due} — when records arrive late, the review typically results in a denial. Could you please make sure they're submitted on time? Just reply here once they're sent, or if there's anything we can do to help.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        const text = `Hello,\n\nA Utilization Review (UR) has been opened on referral ${cs.case_id}. To protect the claim, the treating records and any supporting narrative need to reach the reviewer${due} — when records arrive late, the review typically results in a denial. Could you please make sure they're submitted on time? Just reply here once they're sent, or if there's anything we can do to help.`;
         await sendMail(emails.join(', '), `Time-sensitive — UR records due${ev.deadline ? (' ' + ev.deadline) : ''} (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Confirm records sent', `UR RECORDS SENT — ${cs.case_id}`, `Records have been submitted to the reviewer for ${cs.case_id}.`)], caseFooter(cs.case_id)));
       } else { // IME / IRE -> attorney flag
         const emails = await resolveOwnerEmails(cs, 'attorney');
         if (!emails.length) { await sbPatch(`events?id=eq.${ev.id}`, { notified: true, note: (ev.note || '') + ' [no attorney email — Eric to handle]' }); continue; }
         const longName = type === 'IRE' ? 'an Impairment Rating Evaluation (IRE)' : type === 'IME' ? 'an Independent Medical Examination (IME)' : ('a ' + type);
         const note = type === 'IRE' ? 'IREs can affect the duration of benefits, so the timing may be worth a look.' : type === 'IME' ? 'You may want to prepare your client and confirm representation at the exam.' : '';
-        const text = `Hello,\n\nFlagging for your attention: ${longName} has been reported on referral ${cs.case_id}${ev.deadline ? (' (date: ' + ev.deadline + ')') : ''}. ${note} Please let us know if there's anything you'd like us to coordinate with the provider.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        const text = `Hello,\n\nFlagging for your attention: ${longName} has been reported on referral ${cs.case_id}${ev.deadline ? (' (date: ' + ev.deadline + ')') : ''}. ${note} Please let us know if there's anything you'd like us to coordinate with the provider.`;
         await sendMail(emails.join(', '), `${type} reported — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${type} — ${cs.case_id}`, `Hello,\n\nRegarding the ${type} on ${cs.case_id}:\n\n`)], caseFooter(cs.case_id)));
       }
       await sbPatch(`events?id=eq.${ev.id}`, { notified: true });
@@ -746,12 +770,13 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
   const attachments = docs.map((a, i) => ({ filename: a.filename || `document-${i + 1}`, content: a.content, contentType: a.contentType || 'application/octet-stream' }));
   const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
   const fileList = docs.map(a => a.filename || 'document').join(', ');
-  const note = `Hello,\n\nPlease find the attached document(s) for referral ${cs.case_id} (${patient}), forwarded on behalf of ${senderRole}: ${fileList}.\n\nMDconcierge acts only as a coordination conduit under our mutual agreements and does not retain a copy of these records. Please let us know if anything is missing.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  const note = `Hello,\n\nPlease find the attached document(s) for referral ${cs.case_id} (${patient}), forwarded on behalf of ${senderRole}: ${fileList}.\n\nMDconcierge acts only as a coordination conduit under our mutual agreements and does not retain a copy of these records. Please let us know if anything is missing.`;
   await transporter.sendMail({
-    from: `MDconcierge Coordination <${ZOHO_USER}>`,
+    from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`,
+    replyTo: `MDconcierge <${ZOHO_USER}>`,
     to: recipients.join(', '),
     subject: `Documents for referral ${cs.case_id}`,
-    text: note,
+    text: note + signatureText(),
     html: emailHtml(note, [mailtoBtn('Acknowledge receipt', `RECEIVED: ${cs.case_id}`, `We've received the documents for ${cs.case_id}.`)], caseFooter(cs.case_id)),
     attachments,
     headers: { 'X-MDC-Auto': 'forward' },
@@ -767,11 +792,11 @@ async function draftSignupInvite(name, type) {
   try {
     const prompt = `Write a brief, warm, professional invitation email from MDconcierge (a medical-legal coordination service) inviting someone to join our ${what} by completing a short online onboarding form.
 Recipient name: ${name || '(unknown)'}
-Rules: warm, gracious, concise (~70-90 words). Invite them to complete a quick form so we have everything we need to coordinate smoothly (no back-and-forth later). Mention it only takes a few minutes and they can add their team/contacts. Do NOT give legal/medical advice. End with "With gratitude," then "The MDconcierge Coordination Team". Return only the body text.`;
+Rules: warm, gracious, concise (~70-90 words). Invite them to complete a quick form so we have everything we need to coordinate smoothly (no back-and-forth later). Mention it only takes a few minutes and they can add their team/contacts. Do NOT give legal/medical advice. Do NOT add any sign-off, closing, or signature — end after your final sentence (a personal signature is appended automatically). Return only the body text.`;
     const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  signup-invite draft failed: ' + e.message); }
-  return `Hello${name ? (' ' + name) : ''},\n\nWe'd be delighted to have you join the MDconcierge ${what}. To get started, please take a few minutes to complete our short onboarding form — you can add your team and points of contact so we have everything we need to coordinate smoothly from day one.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  return `Hello${name ? (' ' + name) : ''},\n\nWe'd be delighted to have you join the MDconcierge ${what}. To get started, please take a few minutes to complete our short onboarding form — you can add your team and points of contact so we have everything we need to coordinate smoothly from day one.`;
 }
 async function sendSignupInvites() {
   if (!SVC) return;
@@ -931,7 +956,7 @@ async function sendPortalLinks() {
         const key = randomBytes(24).toString('hex');              // fresh key each request → prior links expire
         await sbPatch(`portal_accounts?id=eq.${a.id}`, { login_key: key });
         const link = 'https://mdconcierge.net/portal.html?key=' + key;
-        const text = `Hello${a.name ? (' ' + a.name) : ''},\n\nHere's your secure sign-in link for the MDconcierge portal — just click to see your cases (no password needed):\n\n${link}\n\nThis link is just for you. If you didn't request it, you can safely ignore this email.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        const text = `Hello${a.name ? (' ' + a.name) : ''},\n\nHere's your secure sign-in link for the MDconcierge portal — just click to see your cases (no password needed):\n\n${link}\n\nThis link is just for you. If you didn't request it, you can safely ignore this email.`;
         await sendMail(a.email, 'Your MDconcierge sign-in link', text, emailHtml(text, [{ label: '🔓 Open my portal', href: link, color: '#c8922a', text: '#1a1305' }]));
         console.log(`  portal sign-in link sent to ${a.email}`);
       }
@@ -952,7 +977,7 @@ async function sendProfileChangeNotices() {
       // Eric is notified IN THE DASHBOARD (a 🔔 bell reading profile_changes), not by email — per his request.
       // Here we only send the editor their confirmation, then mark the row as editor-notified.
       if (ch.editor_email && /@/.test(ch.editor_email)) {
-        const confText = `Hello${ch.editor_name ? (' ' + ch.editor_name) : ''},\n\nThis confirms your MDconcierge information was updated successfully — ${ch.summary.toLowerCase()}. The changes are now live. If you didn't make this change, please reply to this email right away.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+        const confText = `Hello${ch.editor_name ? (' ' + ch.editor_name) : ''},\n\nThis confirms your MDconcierge information was updated successfully — ${ch.summary.toLowerCase()}. The changes are now live. If you didn't make this change, please reply to this email right away.`;
         await sendMail(ch.editor_email, 'Your MDconcierge info was updated', confText, emailHtml(confText, []));
       }
       await sbPatch(`profile_changes?id=eq.${ch.id}`, { status: 'sent', sent_at: new Date().toISOString() });
@@ -999,7 +1024,7 @@ async function sendPortalInvite(role, recordId, email, name, practiceId) {
   if (!r) return;                       // existing account → nothing to do
   if (r.held) { console.log(`  portal invite HELD (free domain) for ${role} ${r.email} — review in dashboard.`); return; }
   const what = role === 'provider' ? 'your MDconcierge referrals' : "the cases we're coordinating for your clients";
-  const text = `Hello${name ? (' ' + name) : ''},\n\nYou can now manage ${what} from one secure portal — no more searching your inbox for the right link. Set a password below and you'll be able to sign in anytime to see your cases and act on them.\n\nThis setup link is unique to you and expires in ${PORTAL_SETUP_TTL_DAYS} days. If you weren't expecting this, you can safely ignore it.\n\nWith gratitude,\nThe MDconcierge Coordination Team`;
+  const text = `Hello${name ? (' ' + name) : ''},\n\nYou can now manage ${what} from one secure portal — no more searching your inbox for the right link. Set a password below and you'll be able to sign in anytime to see your cases and act on them.\n\nThis setup link is unique to you and expires in ${PORTAL_SETUP_TTL_DAYS} days. If you weren't expecting this, you can safely ignore it.`;
   try {
     await sendMail(r.email, 'Set up your MDconcierge portal login', text, emailHtml(text, [{ label: '🔐 Set up my login', href: r.link, color: '#c8922a', text: '#1a1305' }]));
     console.log(`  portal invite sent to ${role} ${r.email}`);
