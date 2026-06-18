@@ -23,14 +23,32 @@ function fmtPhone(raw) {
 }
 function title(s){ return String(s||'').toLowerCase().replace(/\b[a-z]/g,m=>m.toUpperCase()).replace(/\s+/g,' ').trim(); }
 
-async function extract(subject, fromAddr, body) {
-  const prompt = `You are extracting a personal-injury / disability CLIENT REFERRAL from an email that an attorney, paralegal, or medical coordinator sent to an intake inbox. The client is ALREADY REPRESENTED by the sender's firm.
+// Look up the sending firm's website to learn their practice area (a signal for case_type).
+// Best-effort: never blocks a referral. Cached per-domain for the run.
+const FIRM_CACHE = new Map();
+async function firmContext(fromAddr) {
+  const domain = (String(fromAddr).split('@')[1] || '').toLowerCase().trim();
+  if (!domain || FREE_DOMAINS.includes(domain)) return null;   // gmail/yahoo/etc. → no firm site
+  if (FIRM_CACHE.has(domain)) return FIRM_CACHE.get(domain);
+  let text = '';
+  try {
+    const html = await fetchPage('https://' + domain);
+    text = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+               .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 3500);
+  } catch (e) { text = ''; }
+  const result = text ? { domain, text } : null;
+  FIRM_CACHE.set(domain, result);
+  return result;
+}
+
+async function extract(subject, fromAddr, body, firm) {
+  const prompt = `You are extracting a CLIENT REFERRAL from an email an attorney, paralegal, or medical coordinator sent to a medical-legal intake inbox. The client is ALREADY REPRESENTED by the sender's firm. MOST of these referrals are WORKERS' COMPENSATION cases; a minority are auto / personal-injury or disability. Classify case_type carefully using the rules below.
 
 From: ${fromAddr}
 Subject: ${subject}
 Body:
 ${String(body || '').slice(0, 6000)}
-
+${firm && firm.text ? `\nSENDER'S FIRM WEBSITE (domain ${firm.domain}) — use this to identify the firm/attorney and to infer their PRIMARY PRACTICE AREA as a strong signal for case_type (e.g. a workers'-comp firm → lean "wc"). The EMAIL CONTENT still wins if it clearly indicates a different case type. Do NOT copy this text into client fields:\n${firm.text}\n` : ''}
 Return ONLY a JSON object (no prose, no code fence):
 {
  "is_referral": true/false,         // false if this clearly isn't a client referral (spam, newsletter, auto-reply)
@@ -40,10 +58,12 @@ Return ONLY a JSON object (no prose, no code fence):
  "city": "", "state": "",            // state as 2-letter code if determinable
  "zip": "",
  "dob": "",                          // MM/DD/YYYY or ""
- "case_type": "",                    // one of: auto, truck, wc, slip, pi, malpractice, ssd, ltd, other
- "injury_description": "",
+ "case_type": "",                    // one of: wc, auto, truck, slip, pi, malpractice, ssd, ltd, other — see classification rules below
+ "injury_description": "",           // include the affected body part(s); WC referrals are body-part specific
  "needs": "",                        // what the client needs (medical provider, imaging, surgery, funding, etc.)
  "claim_number": "",                 // WC/PI claim number if stated
+ "employer": "",                     // injured worker's EMPLOYER (workers' comp) if stated
+ "carrier": "",                      // insurance carrier or third-party administrator (comp carrier / auto insurer) if stated
  "has_backup_insurance": "",         // does the client have backup/health insurance? "yes" / "no" / "" if not stated
  "claim_status": "",                 // NCP / TNCP / NCD / litigated / accepted / denied / unknown
  "date_of_injury": "",               // as stated; may be vague or ""
@@ -51,10 +71,17 @@ Return ONLY a JSON object (no prose, no code fence):
  "adjuster_name": "", "adjuster_phone": "",
  "panel_posted": "",                 // yes / no / unknown
  "referring_firm": "",               // the law firm / organization name
- "referring_contact": "",            // the person who sent it
+ "referring_contact": "",            // the person who sent it (attorney/paralegal)
+ "firm_practice_area": "",           // what the firm's website suggests they primarily handle: wc / auto / pi / mixed / "" — a signal only
  "confidence": "high|medium|low",    // confidence the core client info is present and unambiguous
  "missing": ""                       // comma-separated important fields missing/unclear, or ""
 }
+HOW TO CLASSIFY case_type (most referrals to this inbox are workers' compensation):
+- "wc" = workers' compensation — the DEFAULT whenever the injury arose at or through work. Signals: injured "at work / on the job / in the course of employment"; an EMPLOYER is named; a work incident or job duty is described; PA comp terms — panel of physicians / panel posted, NCP / TNCP / NCD, IRE (Impairment Rating Evaluation), UR (Utilization Review), C&R (Compromise & Release), TTD / indemnity / wage-loss, WCAIS, the Bureau / WCAB; a comp carrier or TPA (e.g., SWIF, Travelers, The Hartford, Gallagher Bassett, Sedgwick, Broadspire, Zenith, AmTrust); the adjuster authorizing treatment.
+- "auto" / "truck" = motor-vehicle crash: MVA, rear-ended, collision, PIP / med-pay, police report, at-fault driver, auto insurer (GEICO, Progressive, Allstate, State Farm auto).
+- "slip" = premises / slip-and-fall. "pi" = other general personal injury. "ssd" / "ltd" = Social Security or long-term disability.
+When any work-injury signal is present and it is otherwise ambiguous, choose "wc".
+
 Use "" for anything not present. Never invent data.`;
   const msg = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -95,6 +122,9 @@ function buildLead(d, fromAddr, subject) {
     d.client_email ? `Client email: ${String(d.client_email).toLowerCase()}` : '',
     d.dob ? `Client DOB: ${d.dob}` : '',
     d.client_address ? `Address: ${d.client_address}` : '',
+    d.employer ? `Employer: ${d.employer}` : '',
+    d.carrier ? `Carrier/TPA: ${d.carrier}` : '',
+    d.firm_practice_area ? `Firm practice (web): ${d.firm_practice_area}` : '',
     d.has_backup_insurance ? `Backup insurance: ${/^y/i.test(d.has_backup_insurance) ? 'Yes' : 'No'}` : '',
     (d.city || d.state) ? `Location: ${title(d.city) || ''}, ${String(d.state||'').toUpperCase()}` : '',
     d.injury_description ? `Details: ${d.injury_description}` : '',
@@ -1084,7 +1114,9 @@ async function main() {
         }
         let payload, extracted = null;
         try {
-          extracted = await extract(subject, fromAddr, body);
+          let firm = null;
+          try { firm = await firmContext(fromAddr); } catch (e) {}
+          extracted = await extract(subject, fromAddr, body, firm);
           if (extracted && extracted.is_referral === false) {
             console.log(`Skipping non-referral from ${fromAddr}: "${subject}"`);
             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
