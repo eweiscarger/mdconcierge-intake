@@ -30,6 +30,7 @@ jobs:
         env:
           ZOHO_USER: ${{ secrets.ZOHO_USER }}
           ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
+          ERIC_APP_PASSWORD: ${{ secrets.ERIC_APP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

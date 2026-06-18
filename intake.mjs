@@ -11,6 +11,10 @@ const { ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_
 for (const [k, v] of Object.entries({ ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
 }
+// Optional: also watch eric@ directly so referrals mistakenly sent there are caught too.
+// Dormant until ERIC_APP_PASSWORD (a Zoho app password for eric@) is set as a secret.
+const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
+const ERIC_APP_PASSWORD = process.env.ERIC_APP_PASSWORD || '';
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const FREE_DOMAINS = ['gmail.com','yahoo.com','hotmail.com','outlook.com','aol.com','icloud.com','live.com','proton.me','me.com','msn.com'];
@@ -297,6 +301,17 @@ const _origErr = console.error;
 console.error = (...a) => { try { RUN_ERRORS.push(a.map(String).join(' ')); } catch (e) {} _origErr(...a); };
 function daysFromNow(n){ return new Date(Date.now() + n*86400000).toISOString(); }
 async function logAudit(caseId, action, detail){ if(!SVC||!caseId)return; try{ await sbPost('audit_log', { case_id: caseId, action, detail: detail||null, source: 'automation' }); }catch(e){} }
+// Cross-inbox de-dup: remember which email Message-IDs we've already turned into a case,
+// so the same referral arriving via referrals@ AND a eric@→referrals@ forward (or the direct
+// eric@ watch) can only ever create ONE case. Reuses audit_log — no new table needed.
+async function seenMessage(mid){
+  if(!SVC || !mid) return false;
+  try{ const r = await sbGet(`audit_log?select=id&action=eq.msg_processed&detail=eq.${encodeURIComponent(mid)}&limit=1`); return !!(r && r.length); }catch(e){ return false; }
+}
+async function recordMessage(mid, caseId){
+  if(!SVC || !mid) return;
+  try{ await sbPost('audit_log', { case_id: caseId || null, action: 'msg_processed', detail: mid, source: 'automation' }); }catch(e){}
+}
 function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: { apikey: SVC, Authorization: `Bearer ${SVC}` } });
@@ -1054,6 +1069,61 @@ async function healthReport() {
   }
 }
 
+// Watch eric@ directly for referrals attorneys mistakenly send there instead of referrals@.
+// Never marks Eric's mail read; leaves non-referrals untouched; de-dups via Message-ID so a
+// forwarded copy in referrals@ won't double-create. Dormant unless ERIC_APP_PASSWORD is set.
+async function scanEricInbox() {
+  if (!ERIC_APP_PASSWORD) return;
+  let client;
+  try {
+    client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ERIC_USER, pass: ERIC_APP_PASSWORD }, logger: false });
+    await client.connect();
+  } catch (e) { console.error(`[eric@] connect failed: ${e.message}`); return; }
+  let lock, caught = 0;
+  try { lock = await client.getMailboxLock('INBOX'); }
+  catch (e) { console.error(`[eric@] INBOX unavailable: ${e.message}`); try { await client.logout(); } catch (_) {} return; }
+  try {
+    const since = new Date(Date.now() - 3 * 86400000); // only recent mail, to bound work
+    const uids = await client.search({ since }, { uid: true });
+    console.log(`[eric@] scanning ${uids?.length || 0} recent message(s) for stray referrals.`);
+    for (const uid of (uids || [])) {
+      try {
+        const env = await client.fetchOne(uid, { envelope: true }, { uid: true });
+        const mid = env.envelope?.messageId || ('eric-uid-' + uid);
+        if (await seenMessage(mid)) continue;                                   // already handled here or via referrals@
+        const fromAddr = env.envelope?.from?.[0]?.address || '';
+        const subject = env.envelope?.subject || '';
+        if (/@mdconcierge\.net$/i.test(fromAddr)) { await recordMessage(mid, null); continue; }  // our own / internal
+        const full = await client.fetchOne(uid, { source: true }, { uid: true });
+        const parsed = await simpleParser(full.source);
+        if (parsed.headers && parsed.headers.get('x-mdc-auto')) { await recordMessage(mid, null); continue; }
+        const body = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '');
+        let firm = null; try { firm = await firmContext(fromAddr); } catch (e) {}
+        let extracted = null;
+        try { extracted = await extract(subject, fromAddr, body, firm); } catch (e) { await recordMessage(mid, null); continue; }
+        if (!extracted || extracted.is_referral === false) { await recordMessage(mid, null); continue; } // not a referral → leave Eric's mail untouched
+        const payload = buildLead(extracted, fromAddr, subject);
+        await insertLead(payload);
+        await recordMessage(mid, payload.case_id);
+        caught++;
+        console.log(`[eric@] caught a referral sent to eric@ from ${fromAddr} -> ${payload.case_id}`);
+        if (fromAddr) {
+          try {
+            const replyText = await draftReply(extracted, payload, fromAddr);
+            const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
+            const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
+            if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
+            const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
+            await sendReply(fromAddr, subject, replyText, ackHtml, env.envelope?.messageId);  // reply goes FROM referrals@ → migrates them there
+            await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact);
+          } catch (e) { console.error(`  [eric@] ↳ reply failed: ${e.message}`); }
+        }
+      } catch (e) { console.error(`[eric@] error on uid ${uid}: ${e.message}`); }
+    }
+  } finally { lock.release(); try { await client.logout(); } catch (e) {} }
+  console.log(`[eric@] done; ${caught} stray referral(s) caught.`);
+}
+
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
@@ -1154,7 +1224,14 @@ async function main() {
           payload = fallbackLead(fromAddr, subject, body);
           extracted = null;
         }
+        const _mid = msg.envelope?.messageId || '';
+        if (_mid && await seenMessage(_mid)) {
+          console.log(`Already handled (duplicate of a message seen via another inbox) — skipping "${subject}"`);
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
         await insertLead(payload);
+        if (_mid) await recordMessage(_mid, payload.case_id);
         console.log(`Created ${payload.case_id} [${payload.status}] from ${fromAddr} — "${subject}"`);
         created++;
         // gracious auto-acknowledgment back to the referrer
@@ -1180,6 +1257,7 @@ async function main() {
     }
   }
   await client.logout();
+  await scanEricInbox();   // also catch referrals sent to eric@ by mistake
   await announceInNetworkReferrals();
   await notifyRoutedProviders();
   await followUpRouted();
