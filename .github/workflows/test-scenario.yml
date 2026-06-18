@@ -1,0 +1,22 @@
+name: Test scenario
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'seed | bump | cleanup'
+        required: true
+        default: 'seed'
+
+jobs:
+  scenario:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node test-scenario.mjs ${{ inputs.mode }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TEST_RECIPIENT: eweiscarger@gmail.com
