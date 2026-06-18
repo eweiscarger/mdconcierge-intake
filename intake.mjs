@@ -1002,12 +1002,21 @@ async function healthReport() {
 async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   await client.connect();
-  const lock = await client.getMailboxLock('INBOX');
   let created = 0, skipped = 0;
+  const scanBoxes = ['INBOX'];
   try {
-    const uids = await client.search({ seen: false }, { uid: true });
-    console.log(`Found ${uids?.length || 0} new message(s).`);
-    for (const uid of (uids || [])) {
+    const boxes = await client.list();
+    const junk = boxes.find(b => b.specialUse === '\\Junk') || boxes.find(b => /^(spam|junk)/i.test(b.path || ''));
+    if (junk && junk.path && junk.path.toUpperCase() !== 'INBOX') scanBoxes.push(junk.path);
+  } catch (e) { /* mailbox list unavailable — scan INBOX only */ }
+  for (const mailbox of scanBoxes) {
+    let lock;
+    try { lock = await client.getMailboxLock(mailbox); }
+    catch (e) { console.log(`Mailbox "${mailbox}" unavailable (${e.message}) — skipping.`); continue; }
+    try {
+      const uids = await client.search({ seen: false }, { uid: true });
+      console.log(`[${mailbox}] Found ${uids?.length || 0} new message(s).`);
+      for (const uid of (uids || [])) {
       let fromAddr = '', subject = '', body = '';
       try {
         const msg = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
@@ -1109,10 +1118,11 @@ async function main() {
         console.error(`Error on uid ${uid} (${fromAddr}): ${e.message} — left unread for retry.`);
       }
     }
-  } finally {
-    lock.release();
-    await client.logout();
+    } finally {
+      lock.release();
+    }
   }
+  await client.logout();
   await announceInNetworkReferrals();
   await notifyRoutedProviders();
   await followUpRouted();
