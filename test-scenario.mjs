@@ -77,4 +77,14 @@ if (mode === 'seed') {
   const ct = await get(`contacts?select=id&name=eq.${encodeURIComponent('Test Scheduler (TEST)')}`);
   for (const x of ct) { await del(`contacts?id=eq.${x.id}`); console.log('Deleted test contact'); }
   console.log('Cleanup done.');
-} else { console.error(`Unknown mode "${mode}" — use seed | bump | cleanup`); process.exit(1); }
+} else if (mode === 'status') {
+  const cs = await get('cases?select=case_id,status,followup_count,appt_relayed,unreachable_relayed,next_checkin&case_id=like.TEST-*&order=case_id');
+  if (!cs.length) console.log('No TEST-* cases found.');
+  for (const c of cs) {
+    let verdict = '';
+    if (c.case_id.startsWith('TEST-NR-')) verdict = c.followup_count > 0 ? `✓ engine sent ${c.followup_count} reminder(s)` : '… not yet picked up';
+    else if (c.case_id.startsWith('TEST-SCHED-')) verdict = c.appt_relayed ? '✓ appointment relayed to attorney' : '… not yet relayed';
+    else if (c.case_id.startsWith('TEST-UNREACH-')) verdict = (c.unreachable_relayed || c.status === 'escalated') ? '✓ escalation relayed to attorney' : '… not yet escalated';
+    console.log(`${c.case_id}  [status=${c.status} followups=${c.followup_count} appt_relayed=${c.appt_relayed} unreachable_relayed=${c.unreachable_relayed}]  → ${verdict}`);
+  }
+} else { console.error(`Unknown mode "${mode}" — use seed | bump | status | cleanup`); process.exit(1); }
