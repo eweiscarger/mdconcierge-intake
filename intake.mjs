@@ -1080,7 +1080,7 @@ async function sendAttorneyDigests() {
   for (const cs of cases) {
     let emails = [];
     try { emails = await resolveOwnerEmails(cs, 'attorney'); } catch (e) {}
-    for (const e of emails) { (byAtty[e] = byAtty[e] || []).push(cs); }
+    for (const e of emails) { if (/@mdconcierge\.net$/i.test(e)) continue; (byAtty[e] = byAtty[e] || []).push(cs); }
   }
   const week = Math.floor(Date.now() / (7 * 86400000));
   const statusMap = {
