@@ -1274,6 +1274,9 @@ async function main() {
   await forwardCompletedInfo();
   await chaseGaps();
   await healthReport();
+  // Optional external dead-man's switch (e.g. healthchecks.io): ping on a clean run so an
+  // outside service alerts Eric even if GitHub Actions itself is ever disabled. Dormant unless set.
+  if (process.env.HEALTHCHECK_URL) { try { await fetch(process.env.HEALTHCHECK_URL, { method: 'GET' }); } catch (e) {} }
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 

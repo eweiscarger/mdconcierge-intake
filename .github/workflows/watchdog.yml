@@ -1,0 +1,43 @@
+name: Watchdog
+# Independent dead-man's switch. Runs on its OWN self-relaunching loop (separate from the engine)
+# so if the engine crashes, this still fires and emails Eric. Checks the heartbeat every ~5 min.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '*/15 * * * *'   # backstop — restarts the watchdog loop if the chain ever breaks
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Check the engine heartbeat every ~5 minutes for ~54 minutes
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ZOHO_USER: ${{ secrets.ZOHO_USER }}
+          ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
+        run: |
+          END=$((SECONDS+3240))
+          while [ $SECONDS -lt $END ]; do
+            node watchdog.mjs || echo "watchdog pass errored (continuing)"
+            sleep 300
+          done
+      - name: Re-launch the watchdog loop
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run watchdog.yml --repo "$GITHUB_REPOSITORY" || echo "re-launch will fall back to the schedule backstop"
