@@ -1069,6 +1069,47 @@ async function healthReport() {
   }
 }
 
+// ── Weekly attorney digest: ONE email per attorney with all their active cases at a glance. ──
+// Sent at most once per attorney per 7-day window (tracked in audit_log, no new columns).
+async function sendAttorneyDigests() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&status=not.in.(closed,declined,archived,duplicate)&order=created_at.desc`); }
+  catch (e) { console.error('digest: query failed: ' + e.message); return; }
+  const byAtty = {};
+  for (const cs of cases) {
+    let emails = [];
+    try { emails = await resolveOwnerEmails(cs, 'attorney'); } catch (e) {}
+    for (const e of emails) { (byAtty[e] = byAtty[e] || []).push(cs); }
+  }
+  const week = Math.floor(Date.now() / (7 * 86400000));
+  const statusMap = {
+    new: "Received — we're getting it routed", review: 'In review', routed: 'Sent to the provider — awaiting scheduling',
+    in_coordination: 'In coordination', scheduled: 'Scheduled', treating: 'In treatment',
+    escalated: "Needs attention — we've flagged it for action",
+  };
+  let sent = 0;
+  for (const [email, list] of Object.entries(byAtty)) {
+    const tag = `${email}|wk${week}`;
+    try { if ((await sbGet(`audit_log?select=id&action=eq.attorney_digest&detail=eq.${encodeURIComponent(tag)}&limit=1`)).length) continue; } catch (e) {}
+    const lines = list.map(cs => {
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      let st = statusMap[cs.status] || (cs.status || 'in progress');
+      if (cs.status === 'scheduled' && cs.appointment_at) st += ` for ${cs.appointment_at}`;
+      return `• ${patient} (${cs.case_id}) — ${st}`;
+    }).join('\n');
+    const text = `Hello,\n\nHere's where your active cases stand this week — ${list.length} in progress:\n\n${lines}\n\nWe're staying on top of each one. Just reply if you need anything, or want us to push something forward.`;
+    try {
+      await sendMail(email, `Your MDconcierge case update — ${list.length} active case${list.length === 1 ? '' : 's'}`, text,
+        emailHtml(text, [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#c8922a', text: '#1a1305' }], portalLinkHtml()));
+      await sbPost('audit_log', { case_id: null, action: 'attorney_digest', detail: tag, source: 'automation' });
+      sent++;
+      console.log(`  weekly digest → ${email} (${list.length} case(s)).`);
+    } catch (e) { console.error(`  digest to ${email} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Attorney digests sent: ${sent}.`);
+}
+
 // Watch eric@ directly for referrals attorneys mistakenly send there instead of referrals@.
 // Never marks Eric's mail read; leaves non-referrals untouched; de-dups via Message-ID so a
 // forwarded copy in referrals@ won't double-create. Dormant unless ERIC_APP_PASSWORD is set.
@@ -1273,6 +1314,7 @@ async function main() {
   await ensureGaps();
   await forwardCompletedInfo();
   await chaseGaps();
+  await sendAttorneyDigests();
   await healthReport();
   // Optional external dead-man's switch (e.g. healthchecks.io): ping on a clean run so an
   // outside service alerts Eric even if GitHub Actions itself is ever disabled. Dormant unless set.
