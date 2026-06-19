@@ -87,4 +87,8 @@ if (mode === 'seed') {
     else if (c.case_id.startsWith('TEST-UNREACH-')) verdict = (c.unreachable_relayed || c.status === 'escalated') ? '✓ escalation relayed to attorney' : '… not yet escalated';
     console.log(`${c.case_id}  [status=${c.status} followups=${c.followup_count} appt_relayed=${c.appt_relayed} unreachable_relayed=${c.unreachable_relayed}]  → ${verdict}`);
   }
-} else { console.error(`Unknown mode "${mode}" — use seed | bump | status | cleanup`); process.exit(1); }
+} else if (mode === 'digests') {
+  const rows = await get('audit_log?select=detail&action=eq.attorney_digest&order=id.desc&limit=10');
+  if (!rows.length) console.log('No attorney_digest sends recorded yet.');
+  for (const r of rows) console.log(`digest sent → ${r.detail}`);
+} else { console.error(`Unknown mode "${mode}" — use seed | bump | status | digests | cleanup`); process.exit(1); }
