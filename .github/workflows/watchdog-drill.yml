@@ -1,0 +1,33 @@
+name: Watchdog drill
+# Controlled test of the dead-man's switch: forces a DOWN alert (threshold 0 = even a fresh
+# heartbeat counts as "stale"), then runs the normal check so it sends the RECOVERED note.
+# Sends two emails to Eric and proves the alerting path end-to-end. Does NOT touch the engine.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Force a DOWN alert
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ZOHO_USER: ${{ secrets.ZOHO_USER }}
+          ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
+          STALE_MIN: '0'
+        run: node watchdog.mjs
+      - run: sleep 5
+      - name: Confirm RECOVERED
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ZOHO_USER: ${{ secrets.ZOHO_USER }}
+          ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
+          STALE_MIN: '20'
+        run: node watchdog.mjs
