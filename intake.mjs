@@ -6,6 +6,7 @@ import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 import { randomBytes } from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
+import webpush from 'web-push';
 
 const { ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY } = process.env;
 for (const [k, v] of Object.entries({ ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY })) {
@@ -311,6 +312,26 @@ async function seenMessage(mid){
 async function recordMessage(mid, caseId){
   if(!SVC || !mid) return;
   try{ await sbPost('audit_log', { case_id: caseId || null, action: 'msg_processed', detail: mid, source: 'automation' }); }catch(e){}
+}
+// Web push to Eric's installed phone app(s). Dormant unless VAPID_* secrets + a push_subscriptions table exist.
+let _vapidReady = false;
+async function pushNotify(title, body, url){
+  const { VAPID_PUBLIC, VAPID_PRIVATE, VAPID_SUBJECT } = process.env;
+  if (!SVC || !VAPID_PUBLIC || !VAPID_PRIVATE) return;
+  try {
+    if (!_vapidReady) { webpush.setVapidDetails(VAPID_SUBJECT || 'mailto:eric@mdconcierge.net', VAPID_PUBLIC, VAPID_PRIVATE); _vapidReady = true; }
+    let subs = [];
+    try { subs = await sbGet('push_subscriptions?select=endpoint,subscription'); } catch (e) { return; }   // table not set up yet → quietly skip
+    const payload = JSON.stringify({ title, body, url: url || '/admin-v2.html', tag: 'mdc-referral' });
+    for (const s of (subs || [])) {
+      try { await webpush.sendNotification(s.subscription, payload); }
+      catch (e) {
+        if (e && (e.statusCode === 404 || e.statusCode === 410)) {   // expired subscription → clean it up
+          try { await fetch(`${SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(s.endpoint)}`, { method: 'DELETE', headers: { apikey: SVC, Authorization: `Bearer ${SVC}` } }); } catch (_) {}
+        }
+      }
+    }
+  } catch (e) { console.error('  push notify failed: ' + e.message); }
 }
 function addBusinessDays(n) { const d = new Date(); let added = 0; while (added < n) { d.setDate(d.getDate() + 1); const dow = d.getDay(); if (dow !== 0 && dow !== 6) added++; } return d.toISOString(); }
 async function sbGet(path) {
@@ -1148,6 +1169,8 @@ async function scanEricInbox() {
         await recordMessage(mid, payload.case_id);
         caught++;
         console.log(`[eric@] caught a referral sent to eric@ from ${fromAddr} -> ${payload.case_id}`);
+        { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
+          await pushNotify('New referral (sent to eric@)', `${pn} (${payload.case_id})`); }
         if (fromAddr) {
           try {
             const replyText = await draftReply(extracted, payload, fromAddr);
@@ -1275,6 +1298,8 @@ async function main() {
         if (_mid) await recordMessage(_mid, payload.case_id);
         console.log(`Created ${payload.case_id} [${payload.status}] from ${fromAddr} — "${subject}"`);
         created++;
+        { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
+          await pushNotify('New referral', `${pn} — ${(payload.case_type || 'new case').toUpperCase()} (${payload.case_id})`); }
         // gracious auto-acknowledgment back to the referrer
         if (fromAddr) {
           try {
