@@ -9,6 +9,8 @@
     "imapflow": "^1.0.187",
     "mailparser": "^3.7.2",
     "nodemailer": "^6.9.15",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "mammoth": "^1.8.0",
+    "xlsx": "^0.18.5"
   }
 }

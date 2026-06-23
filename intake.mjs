@@ -7,6 +7,8 @@ import nodemailer from 'nodemailer';
 import { randomBytes } from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import webpush from 'web-push';
+import mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
 
 const { ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY } = process.env;
 for (const [k, v] of Object.entries({ ZOHO_USER, ZOHO_APP_PASSWORD, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY })) {
@@ -98,27 +100,37 @@ Use "" for anything not present. Never invent data.`;
   return JSON.parse(txt);
 }
 
-// Read an attorney's reply (body + any PDF/image attachment) and pull missing non-PHI case fields.
+// Read an attorney's reply (body + attachments: PDF, image, Word, Excel, or text) and pull missing non-PHI case fields.
 async function extractCaseInfo(subject, body, attachments) {
   try {
-    const content = [{ type: 'text', text:
-`This is a reply about an EXISTING workers'-comp / personal-injury case. From the email and any attached document(s), extract ONLY these case fields when clearly present. Return ONLY JSON (no prose, no code fence):
+    const media = [];        // PDFs/images Claude reads natively
+    let docText = '';        // text we pull out of Word/Excel/plain-text files
+    for (const a of (attachments || []).slice(0, 4)) {
+      try {
+        if (!a.content || a.content.length > 12 * 1024 * 1024) continue;       // skip missing / oversized
+        const ct = (a.contentType || '').toLowerCase();
+        const fn = (a.filename || '').toLowerCase();
+        if (ct.includes('pdf') || fn.endsWith('.pdf')) {
+          media.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: a.content.toString('base64') } });
+        } else if (/^image\/(png|jpe?g|webp|gif)/.test(ct) || /\.(png|jpe?g|webp|gif)$/.test(fn)) {
+          media.push({ type: 'image', source: { type: 'base64', media_type: (ct.split(';')[0] || 'image/png'), data: a.content.toString('base64') } });
+        } else if (fn.endsWith('.docx') || ct.includes('wordprocessingml')) {
+          try { const r = await mammoth.extractRawText({ buffer: a.content }); if (r && r.value) docText += `\n[${a.filename}]\n${r.value.slice(0, 4000)}`; } catch (e) {}
+        } else if (fn.endsWith('.xlsx') || fn.endsWith('.xls') || ct.includes('spreadsheetml') || ct.includes('ms-excel')) {
+          try { const wb = XLSX.read(a.content, { type: 'buffer' }); for (const sn of wb.SheetNames.slice(0, 3)) docText += `\n[${a.filename} · ${sn}]\n${XLSX.utils.sheet_to_csv(wb.Sheets[sn]).slice(0, 3000)}`; } catch (e) {}
+        } else if (ct.startsWith('text/') || fn.endsWith('.txt') || fn.endsWith('.csv')) {
+          try { docText += `\n[${a.filename}]\n${a.content.toString('utf8').slice(0, 4000)}`; } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    const prompt = `This is a reply about an EXISTING workers'-comp / personal-injury case. From the email${docText ? ', the attached document text,' : ''} and any attached PDF/image, extract ONLY these case fields when clearly present. Return ONLY JSON (no prose, no code fence):
 {"date_of_injury":"","claim_number":"","claim_status":"","adjuster_name":"","adjuster_phone":"","body_part":"","employer":""}
 Use "" for anything not present. Never invent. claim_status examples: NCP, TNCP, NCD, accepted, denied, litigated.
 
 Subject: ${subject}
 Body:
-${String(body || '').slice(0, 5000)}` }];
-    for (const a of (attachments || []).slice(0, 3)) {
-      try {
-        const ct = (a.contentType || '').toLowerCase();
-        if (!a.content || a.content.length > 8 * 1024 * 1024) continue;       // skip missing / oversized
-        const data = a.content.toString('base64');
-        if (ct.includes('pdf')) content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } });
-        else if (/^image\/(png|jpe?g|webp|gif)/.test(ct)) content.push({ type: 'image', source: { type: 'base64', media_type: ct.split(';')[0], data } });
-      } catch (e) {}
-    }
-    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content }] });
+${String(body || '').slice(0, 5000)}${docText ? `\n\nAttached document text:${docText.slice(0, 8000)}` : ''}`;
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, ...media] }] });
     let txt = (m.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     return JSON.parse(txt);
   } catch (e) { console.error('  extractCaseInfo failed: ' + e.message); return {}; }
