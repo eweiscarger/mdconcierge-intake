@@ -98,6 +98,31 @@ Use "" for anything not present. Never invent data.`;
   return JSON.parse(txt);
 }
 
+// Read an attorney's reply (body + any PDF/image attachment) and pull missing non-PHI case fields.
+async function extractCaseInfo(subject, body, attachments) {
+  try {
+    const content = [{ type: 'text', text:
+`This is a reply about an EXISTING workers'-comp / personal-injury case. From the email and any attached document(s), extract ONLY these case fields when clearly present. Return ONLY JSON (no prose, no code fence):
+{"date_of_injury":"","claim_number":"","claim_status":"","adjuster_name":"","adjuster_phone":"","body_part":"","employer":""}
+Use "" for anything not present. Never invent. claim_status examples: NCP, TNCP, NCD, accepted, denied, litigated.
+
+Subject: ${subject}
+Body:
+${String(body || '').slice(0, 5000)}` }];
+    for (const a of (attachments || []).slice(0, 3)) {
+      try {
+        const ct = (a.contentType || '').toLowerCase();
+        if (!a.content || a.content.length > 8 * 1024 * 1024) continue;       // skip missing / oversized
+        const data = a.content.toString('base64');
+        if (ct.includes('pdf')) content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } });
+        else if (/^image\/(png|jpe?g|webp|gif)/.test(ct)) content.push({ type: 'image', source: { type: 'base64', media_type: ct.split(';')[0], data } });
+      } catch (e) {}
+    }
+    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 400, messages: [{ role: 'user', content }] });
+    let txt = (m.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    return JSON.parse(txt);
+  } catch (e) { console.error('  extractCaseInfo failed: ' + e.message); return {}; }
+}
 async function insertLead(payload) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/cases`, {
     method: 'POST',
@@ -200,7 +225,7 @@ Rules:
 - Warm, gracious, genuinely appreciative, professional, concise (~90-130 words).
 - Sincerely thank them for the referral and for trusting MDconcierge; confirm it is received and our coordination team is already on it.
 - Include the reference number.
-- If information is still needed, politely and graciously ask them to reply with those specific items.
+- If information is still needed, politely give them TWO easy options: (1) reply to this email with the items, attaching any relevant documentation (we'll read it and pull what we need), or (2) use the secure link below to add the details themselves in our portal — whichever is easier for them.
 - Do NOT give legal or medical advice. Do NOT promise specific timelines, outcomes, or guarantees.
 - Do NOT add any sign-off, closing, or signature — end after your final sentence. A personal signature from Eric Weiscarger is appended automatically.
 Return ONLY the email body text (no subject line).`;
@@ -208,7 +233,7 @@ Return ONLY the email body text (no subject line).`;
     const t = (msg.content?.[0]?.text || '').trim();
     if (t) return t;
   } catch (e) { console.error('  ↳ personalized draft unavailable, using template: ' + e.message); }
-  const ask = missing ? ` When you have a moment, could you kindly reply with the following so we can move quickly: ${missing}.` : ' We will be in touch shortly with next steps.';
+  const ask = missing ? ` When you have a moment, you can either reply to this email with the following (attach any documentation and we'll pull what we need), or use the "Add case details yourself" link below to enter them in our portal: ${missing}.` : ' We will be in touch shortly with next steps.';
   return `Hello${contact ? ' ' + contact : ''},\n\nThank you so much for your referral — we are truly grateful you thought of MDconcierge. We have received it for ${clientName} (reference ${refId}), and our coordination team is already getting to work.${ask}`;
 }
 
@@ -617,7 +642,7 @@ async function draftChase(byCase) {
     const prompt = `Write a brief, warm, professional follow-up email from MDconcierge (medical-legal coordination) gently requesting the outstanding items we still need to keep the case(s) moving. Batch everything into ONE message.
 Outstanding by case:
 ${lines}
-Rules: warm, brief, appreciative; no guilt or manufactured urgency. Present the asks as a tight bulleted list grouped by case reference. One clear reply path (just reply to this email). No legal/medical advice. Reference cases by their reference code only — NO patient names or PII. Do NOT add any sign-off, closing, or signature — end after your final sentence (a personal signature is appended automatically). Return only the body text.`;
+Rules: warm, brief, appreciative; no guilt or manufactured urgency. Present the asks as a tight bulleted list grouped by case reference. Offer two easy paths: they can reply to this email with the items (attaching any documentation we can read), or use the link below to add the details themselves in our portal. No legal/medical advice. Reference cases by their reference code only — NO patient names or PII. Do NOT add any sign-off, closing, or signature — end after your final sentence (a personal signature is appended automatically). Return only the body text.`;
     const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 450, messages: [{ role: 'user', content: prompt }] });
     const t = (m.content?.[0]?.text || '').trim(); if (t) return t;
   } catch (e) { console.error('  chase draft failed: ' + e.message); }
@@ -1282,21 +1307,8 @@ async function main() {
           continue;
         }
         const docRefM = (subject + ' ' + body).match(/\b([A-Z]{2,4}-[A-Z]-\d{4}-\d+)\b/i);
-        // Phase E(b): inbound document(s) for a known case -> forward to the counterparty (conduit; never stored)
+        // attachments (records / bills / claim docs) for the inbound handlers below
         const docs = (parsed.attachments || []).filter(a => a && a.content && (a.filename || (a.size || 0) > 2048));
-        if (docs.length && docRefM && SVC) {
-          let fcs = null;
-          try { fcs = (await sbGet(`cases?select=*&case_id=eq.${docRefM[1].toUpperCase()}`))[0]; } catch (e) {}
-          if (fcs) {
-            try {
-              const res = await forwardDocuments(fcs, fromAddr, subject, body, docs);
-              if (res.forwarded) console.log(`Forwarded ${docs.length} document(s) for ${fcs.case_id} -> ${res.role} (not retained).`);
-              else console.log(`Document for ${fcs.case_id} not auto-forwarded (${res.reason}) — flagged for manual handling.`);
-            } catch (e) { console.error(`  doc forward failed for ${fcs.case_id}: ${e.message} — left unread for retry.`); continue; }
-            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-            continue;
-          }
-        }
         // Phase E: a "SENT:" confirmation (no attachment) -> mark the requested artifact transmitted
         const sentM = subject.match(/^\s*SENT:\s*(.+?)\s*[—-]+\s*([A-Z]{2,4}-[A-Z]-\d{4}-\d+)/i);
         if (sentM && SVC) {
@@ -1306,6 +1318,31 @@ async function main() {
           } catch (e) { console.error('  sent-confirm failed: ' + e.message); }
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
+        }
+        // A reply/update that references a KNOWN case → extract any missing info from the body + attachments,
+        // update that case (never create a duplicate), and forward any documents to the counterparty.
+        if (docRefM && SVC) {
+          let kc = null;
+          try { kc = (await sbGet(`cases?select=*&case_id=eq.${docRefM[1].toUpperCase()}`))[0]; } catch (e) {}
+          if (kc) {
+            try {
+              const info = await extractCaseInfo(subject, body, docs);
+              const patch = {};
+              const setIf = (f, v) => { if (v && !kc[f]) patch[f] = v; };
+              setIf('date_of_injury', info.date_of_injury); setIf('claim_number', info.claim_number);
+              setIf('claim_status', info.claim_status); setIf('adjuster_name', info.adjuster_name); setIf('adjuster_phone', info.adjuster_phone);
+              if (info.body_part && !kc.injury_type) patch.injury_type = info.body_part;
+              if (info.employer) patch.notes = (kc.notes || '') + ' | Employer (from reply): ' + info.employer;
+              if (Object.keys(patch).length) {
+                if (kc.routed_provider_id) patch.provider_update_pending = true;
+                await sbPatch(`cases?id=eq.${kc.id}`, patch);
+                console.log(`  ${kc.case_id}: filled from reply → ${Object.keys(patch).filter(k => k !== 'provider_update_pending').join(', ')}`);
+              } else console.log(`  ${kc.case_id}: reply had no new extractable info.`);
+            } catch (e) { console.error(`  reply info-extract failed for ${kc.case_id}: ${e.message}`); }
+            if (docs.length) { try { const res = await forwardDocuments(kc, fromAddr, subject, body, docs); if (res && res.forwarded) console.log(`  forwarded ${docs.length} doc(s) for ${kc.case_id} -> ${res.role}.`); } catch (e) { console.error(`  doc forward failed for ${kc.case_id}: ${e.message}`); } }
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+            continue;
+          }
         }
         let payload, extracted = null;
         try {
