@@ -360,8 +360,12 @@ function msgFingerprint(fromAddr, subject, body){
     + String(body || '').replace(/\s+/g, ' ').trim().slice(0, 300);
   return createHash('sha1').update(basis).digest('hex');
 }
-async function seenFingerprint(fp){ if(!SVC || !fp) return false; try{ return !!(await sbGet(`audit_log?select=id&action=eq.msg_fp&detail=eq.${fp}&limit=1`)).length; }catch(e){ return false; } }
-async function recordFingerprint(fp, caseId){ if(!SVC || !fp) return; try{ await sbPost('audit_log', { case_id: caseId || null, action: 'msg_fp', detail: fp, source: 'automation' }); }catch(e){} }
+// De-dup against the cases table (the fingerprint is stored on each case as intake_fp) — reliable, unlike audit_log here.
+async function seenFingerprint(fp){
+  if(!fp || !SVC) return false;
+  try{ return !!(await sbGet(`cases?select=id&intake_fp=eq.${fp}&limit=1`)).length; }
+  catch(e){ return false; }
+}
 // Web push to Eric's installed phone app(s). Dormant unless VAPID_* secrets + a push_subscriptions table exist.
 let _vapidReady = false;
 async function pushNotify(title, body, url){
@@ -1246,7 +1250,10 @@ async function scanEricInbox() {
         let extracted = null;
         try { extracted = await extract(subject, fromAddr, body, firm); } catch (e) { await recordMessage(mid, null); continue; }
         if (!extracted || extracted.is_referral === false) { await recordMessage(mid, null); continue; } // not a referral → leave Eric's mail untouched
+        const ericFp = msgFingerprint(fromAddr, subject, body);
+        if (await seenFingerprint(ericFp)) { await recordMessage(mid, null); continue; }   // already a case for this exact email — don't duplicate
         const payload = buildLead(extracted, fromAddr, subject);
+        payload.intake_fp = ericFp;
         await insertLead(payload);
         await recordMessage(mid, payload.case_id);
         caught++;
@@ -1380,15 +1387,16 @@ async function main() {
           extracted = await extract(subject, fromAddr, body, firm);
           if (extracted && extracted.is_referral === false) {
             console.log(`Skipping non-referral from ${fromAddr}: "${subject}"`);
-            await recordFingerprint(_fp, null);
             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
             skipped++;
             continue;
           }
           payload = buildLead(extracted, fromAddr, subject);
+          payload.intake_fp = _fp;   // stamp the fingerprint so this exact email can't create a second case
         } catch (e) {
           console.error(`Parse failed for "${subject}" from ${fromAddr}: ${e.message} — creating review lead.`);
           payload = fallbackLead(fromAddr, subject, body);
+          payload.intake_fp = _fp;
           extracted = null;
         }
         const _mid = msg.envelope?.messageId || '';
@@ -1399,7 +1407,6 @@ async function main() {
         }
         await insertLead(payload);
         if (_mid) await recordMessage(_mid, payload.case_id);
-        await recordFingerprint(_fp, payload.case_id);
         console.log(`Created ${payload.case_id} [${payload.status}] from ${fromAddr} — "${subject}"`);
         created++;
         { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
