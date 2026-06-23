@@ -4,7 +4,7 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import webpush from 'web-push';
 import mammoth from 'mammoth';
@@ -352,6 +352,16 @@ async function recordMessage(mid, caseId){
   if(!SVC || !mid) return;
   try{ await sbPost('audit_log', { case_id: caseId || null, action: 'msg_processed', detail: mid, source: 'automation' }); }catch(e){}
 }
+// Reliable content fingerprint (sender + subject + body start) — catches the same email being re-read
+// even when the mail server won't persist the "read" flag (e.g. Junk folder). Independent of Message-ID.
+function msgFingerprint(fromAddr, subject, body){
+  const basis = String(fromAddr || '').toLowerCase() + '|'
+    + String(subject || '').toLowerCase().replace(/^\s*(re|fwd?):\s*/i, '').trim() + '|'
+    + String(body || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return createHash('sha1').update(basis).digest('hex');
+}
+async function seenFingerprint(fp){ if(!SVC || !fp) return false; try{ return !!(await sbGet(`audit_log?select=id&action=eq.msg_fp&detail=eq.${fp}&limit=1`)).length; }catch(e){ return false; } }
+async function recordFingerprint(fp, caseId){ if(!SVC || !fp) return; try{ await sbPost('audit_log', { case_id: caseId || null, action: 'msg_fp', detail: fp, source: 'automation' }); }catch(e){} }
 // Web push to Eric's installed phone app(s). Dormant unless VAPID_* secrets + a push_subscriptions table exist.
 let _vapidReady = false;
 async function pushNotify(title, body, url){
@@ -1356,6 +1366,13 @@ async function main() {
             continue;
           }
         }
+        const _fp = msgFingerprint(fromAddr, subject, body);
+        if (await seenFingerprint(_fp)) {   // already handled this exact email — don't create a duplicate
+          console.log(`Duplicate of an already-processed email — skipping "${subject}"`);
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          skipped++;
+          continue;
+        }
         let payload, extracted = null;
         try {
           let firm = null;
@@ -1363,6 +1380,7 @@ async function main() {
           extracted = await extract(subject, fromAddr, body, firm);
           if (extracted && extracted.is_referral === false) {
             console.log(`Skipping non-referral from ${fromAddr}: "${subject}"`);
+            await recordFingerprint(_fp, null);
             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
             skipped++;
             continue;
@@ -1381,6 +1399,7 @@ async function main() {
         }
         await insertLead(payload);
         if (_mid) await recordMessage(_mid, payload.case_id);
+        await recordFingerprint(_fp, payload.case_id);
         console.log(`Created ${payload.case_id} [${payload.status}] from ${fromAddr} — "${subject}"`);
         created++;
         { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
