@@ -301,6 +301,8 @@ const RUN_ERRORS = [];
 const _origErr = console.error;
 console.error = (...a) => { try { RUN_ERRORS.push(a.map(String).join(' ')); } catch (e) {} _origErr(...a); };
 function daysFromNow(n){ return new Date(Date.now() + n*86400000).toISOString(); }
+function hoursFromNow(h){ return new Date(Date.now() + h*3600000).toISOString(); }
+const CHASE_INTERVAL_H = 48, CHASE_CAP = 4;  // ask once in the thank-you, then chase every 48h up to CHASE_CAP times, then escalate to Eric
 async function logAudit(caseId, action, detail){ if(!SVC||!caseId)return; try{ await sbPost('audit_log', { case_id: caseId, action, detail: detail||null, source: 'automation' }); }catch(e){} }
 // Cross-inbox de-dup: remember which email Message-IDs we've already turned into a case,
 // so the same referral arriving via referrals@ AND a eric@→referrals@ forward (or the direct
@@ -520,7 +522,7 @@ async function ensureGaps() {
         if (gf.filled(cs)) {
           if (existing && existing.status !== 'received') await sbPatch(`case_gaps?id=eq.${existing.id}`, { status: 'received', updated_at: new Date().toISOString() });
         } else if (!existing) {
-          await sbPost('case_gaps', { case_id: cs.id, field: gf.field, label: gf.label, owner: gf.owner, status: 'open', next_touch: addBusinessDays(3), touches: 0 });
+          await sbPost('case_gaps', { case_id: cs.id, field: gf.field, label: gf.label, owner: gf.owner, status: 'open', next_touch: hoursFromNow(CHASE_INTERVAL_H), touches: 0 });
           created++;
         }
       }
@@ -560,6 +562,36 @@ async function forwardCompletedInfo() {
   if (sent) console.log(`Claim details forwarded to providers: ${sent}.`);
 }
 
+// ── When missing info is added (self-serve or transcribed), notify the routed provider with the update + that it's live in their portal ──
+async function pushProviderUpdates() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&provider_update_pending=is.true&routed_provider_id=not.is.null`); }
+  catch (e) { console.error('provider-update: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const cs of cases) {
+    try {
+      const emails = await resolveOwnerEmails(cs, 'provider');
+      if (!emails.length) { await sbPatch(`cases?id=eq.${cs.id}`, { provider_update_pending: false }); continue; }
+      const lines = [
+        cs.claim_number ? `Claim #: ${cs.claim_number}` : '',
+        cs.claim_status ? `Claim status: ${cs.claim_status}` : '',
+        cs.date_of_injury ? `Date of injury: ${cs.date_of_injury}` : '',
+        (cs.adjuster_name || cs.adjuster_phone) ? `Adjuster: ${[cs.adjuster_name, cs.adjuster_phone].filter(Boolean).join(' · ')}` : '',
+        cs.injury_type ? `Injury / body part: ${cs.injury_type}` : '',
+      ].filter(Boolean).join('\n');
+      const text = `Hello,\n\nAn update on referral ${cs.case_id} — we've received additional case details:\n\n${lines}\n\nThis case and all its updates are live in your MDconcierge portal, where you can view everything anytime. Please let us know if you need anything else for billing or authorization.`;
+      const btns = [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#c8922a', text: '#1a1305' }, mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)];
+      await sendMail(emails.join(', '), `Case update — ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
+      await sbPatch(`cases?id=eq.${cs.id}`, { provider_update_pending: false });
+      await logAudit(cs.id, 'provider_update_sent', null);
+      sent++;
+      console.log(`  provider update sent for ${cs.case_id}`);
+    } catch (e) { console.error(`  provider-update case ${cs.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Provider updates sent: ${sent}.`);
+}
+
 // ── Phase C: the chase — batched, escalating follow-up on open gaps ──
 async function resolveOwnerEmails(cs, owner) {
   if (owner === 'attorney') {
@@ -595,8 +627,8 @@ async function chaseGaps() {
   if (!SVC) return;
   const nowIso = new Date().toISOString();
   let due = [], escal = [];
-  try { due = await sbGet(`case_gaps?select=*&status=eq.open&next_touch=lte.${nowIso}&touches=lt.2`); } catch (e) { console.error('chase: query failed: ' + e.message); return; }
-  try { escal = await sbGet(`case_gaps?select=*&status=eq.open&next_touch=lte.${nowIso}&touches=gte.2`); } catch (e) {}
+  try { due = await sbGet(`case_gaps?select=*&status=eq.open&next_touch=lte.${nowIso}&touches=lt.${CHASE_CAP}`); } catch (e) { console.error('chase: query failed: ' + e.message); return; }
+  try { escal = await sbGet(`case_gaps?select=*&status=eq.open&next_touch=lte.${nowIso}&touches=gte.${CHASE_CAP}`); } catch (e) {}
   const now = new Date();
   const active = due.filter(g => !g.snooze_until || new Date(g.snooze_until) <= now);
   const caseIds = [...new Set(active.concat(escal).map(g => g.case_id))];
@@ -620,8 +652,11 @@ async function chaseGaps() {
     const subj = nCases > 1 ? `MDconcierge — outstanding items (${nCases} cases)` : `MDconcierge — outstanding items (${Object.keys(byCase)[0]})`;
     try {
       const text = await draftChase(byCase);
-      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')], portalLinkHtml()));
-      for (const it of grp.items) await sbPatch(`case_gaps?id=eq.${it.g.id}`, { touches: (it.g.touches || 0) + 1, next_touch: addBusinessDays(5), updated_at: new Date().toISOString() });
+      const btns = [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')];
+      const singleCs = nCases === 1 ? grp.items[0].cs : null;   // for one-case digests, let them self-serve the form
+      if (singleCs && singleCs.status_token) btns.unshift({ label: '✏️ Add the info yourself', href: 'https://mdconcierge.net/status.html?t=' + singleCs.status_token, color: '#c8922a', text: '#1a1305' });
+      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, btns, portalLinkHtml()));
+      for (const it of grp.items) await sbPatch(`case_gaps?id=eq.${it.g.id}`, { touches: (it.g.touches || 0) + 1, next_touch: hoursFromNow(CHASE_INTERVAL_H), updated_at: new Date().toISOString() });
       sent++;
     } catch (e) { console.error('  chase send failed: ' + e.message); }
   }
@@ -1176,6 +1211,7 @@ async function scanEricInbox() {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
+            if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#c8922a', text: '#1a1305' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
             const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, env.envelope?.messageId);  // reply goes FROM referrals@ → migrates them there
@@ -1306,6 +1342,7 @@ async function main() {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
+            if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#c8922a', text: '#1a1305' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
             const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
@@ -1338,6 +1375,7 @@ async function main() {
   await processImportJobs();
   await ensureGaps();
   await forwardCompletedInfo();
+  await pushProviderUpdates();
   await chaseGaps();
   await sendAttorneyDigests();
   await healthReport();
