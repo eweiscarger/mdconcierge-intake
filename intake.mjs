@@ -411,6 +411,76 @@ Rules: warm, gracious, concise (~80-100 words). Invite them to review and accept
   } catch (e) { console.error('  provider draft failed, using template: ' + e.message); }
   return `Hello,\n\nWe have a new ${cs.case_type || ''} patient referral${location ? (' in ' + location) : ''} we'd be grateful to coordinate with your office (reference ${cs.case_id || 'N/A'}). Injury / area: ${cs.injury_type || 'details on acceptance'}. The patient is represented by counsel.\n\nPlease review and accept below to unlock the full patient details and EHR / case-management import.`;
 }
+// ── In-network SERVICE REQUESTS (black-box): the referrer just asks for a service; the
+// request_in_network RPC creates a placement-pending child case (lead_source='in_network_request').
+// We confirm RECEIPT to the referrer now, and confirm again when it's SCHEDULED. Placement to a
+// practice happens in the admin / via the auto-router — the referrer never sees the network. ──
+async function referrerEmails(cs) {
+  if (cs.referred_by === 'attorney') return await resolveOwnerEmails(cs, 'attorney');
+  if (cs.referred_by === 'provider') {
+    if (!cs.parent_case_id) return [];
+    try { const parent = (await sbGet(`cases?select=*&id=eq.${cs.parent_case_id}`))[0]; return parent ? await resolveOwnerEmails(parent, 'provider') : []; }
+    catch (e) { return []; }
+  }
+  return [];
+}
+// High-level "who's treating" — names the treating doctor + practice when known, else the practice.
+async function treatingName(cs) {
+  let doc = '', prac = '';
+  const pid = cs.treating_provider_id || cs.routed_provider_id;
+  if (pid) {
+    try {
+      const p = (await sbGet(`providers?select=doctor_name,practice_id&id=eq.${pid}`))[0];
+      if (p) { doc = p.doctor_name || ''; if (p.practice_id) { const pr = (await sbGet(`practices?select=name&id=eq.${p.practice_id}`))[0]; prac = pr ? (pr.name || '') : ''; } }
+    } catch (e) {}
+  }
+  if (!prac && cs.routed_practice_id) { try { const pr = (await sbGet(`practices?select=name&id=eq.${cs.routed_practice_id}`))[0]; prac = pr ? (pr.name || '') : ''; } catch (e) {} }
+  if (doc && prac) return `${doc} at ${prac}`;
+  return doc || prac || '';
+}
+async function confirmNetworkRequests() {
+  if (!SVC) return;
+  let reqs = [];
+  try { reqs = await sbGet(`cases?select=*&lead_source=eq.in_network_request&request_acked=is.false`); }
+  catch (e) { console.error('netreq ack: query failed: ' + e.message); return; }
+  for (const cs of reqs) {
+    try {
+      const svc = cs.service_label || 'additional care';
+      const emails = await referrerEmails(cs);
+      if (emails.length) {
+        const text = `Hello,\n\nWe've received your request for ${svc} (reference ${cs.case_id}) and our team is placing it with an in-network provider near your patient. We'll confirm as soon as it's scheduled — nothing further is needed from you.`;
+        await sendMail(emails.join(', '), `Received — ${svc} request (${cs.case_id})`, text, emailHtml(text, [], caseFooter(cs.case_id)));
+        console.log(`  confirmed in-network request ${cs.case_id} (${svc}) to referrer`);
+      }
+      // mark acked + referral_announced so the routed-referral announcer skips this placement request
+      await sbPatch(`cases?id=eq.${cs.id}`, { request_acked: true, referral_announced: true });
+      await logAudit(cs.id, 'in_network_request_received', svc);
+    } catch (e) { console.error(`  netreq ack ${cs.id} failed: ${e.message}`); }
+  }
+}
+async function confirmNetworkRequestScheduled() {
+  if (!SVC) return;
+  let reqs = [];
+  // attorney referrers are already covered by relayAppointments; here we close the loop for provider referrers.
+  try { reqs = await sbGet(`cases?select=*&lead_source=eq.in_network_request&referred_by=eq.provider&schedule_status=eq.scheduled&request_done_confirmed=is.false`); }
+  catch (e) { console.error('netreq sched: query failed: ' + e.message); return; }
+  for (const cs of reqs) {
+    try {
+      const svc = cs.service_label || 'the requested service';
+      const emails = await referrerEmails(cs);
+      if (emails.length) {
+        const stok = await statusToken(cs);
+        const who = await treatingName(cs);
+        const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'your patient';
+        const text = `Hello,\n\nGood news — the ${svc} you requested for ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${who ? (' with ' + who) : ''}. They'll continue care there and our team is coordinating everything — nothing further is needed from you.`;
+        await sendMail(emails.join(', '), `Scheduled — ${svc} request (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)));
+        console.log(`  confirmed scheduled in-network request ${cs.case_id} to referrer`);
+      }
+      await sbPatch(`cases?id=eq.${cs.id}`, { request_done_confirmed: true });
+      await logAudit(cs.id, 'in_network_request_scheduled_confirmed', cs.appointment_at || null);
+    } catch (e) { console.error(`  netreq sched ${cs.id} failed: ${e.message}`); }
+  }
+}
 // ── In-network referrals: when a provider/attorney sends a patient onward, the NEW provider is
 // notified by notifyRoutedProviders (it's a routed child case); here we FYI the attorney so all are looped in. ──
 async function announceInNetworkReferrals() {
@@ -1436,10 +1506,12 @@ async function main() {
   }
   await client.logout();
   await scanEricInbox();   // also catch referrals sent to eric@ by mistake
+  await confirmNetworkRequests();          // ack the referrer "received, placing it"
   await announceInNetworkReferrals();
   await notifyRoutedProviders();
   await followUpRouted();
   await relayAppointments();
+  await confirmNetworkRequestScheduled();  // confirm to a provider referrer once scheduled (+ who's treating)
   await relayTreatingProvider();
   await escalateUnreachable();
   await emailArtifactRequests();
