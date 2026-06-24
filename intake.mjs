@@ -946,6 +946,31 @@ async function markArtifactTransmitted(caseId, labelHint, autoCreate = true) {
   } catch (e) { console.error('  markArtifactTransmitted: ' + e.message); }
   return false;
 }
+// Party-to-party message replies: relay the reply to the OTHER party. Body is NOT stored — only metadata logged.
+function stripQuote(body) {
+  let b = String(body || '');
+  const cuts = [/\r?\nOn .+wrote:/i, /\r?\n-{2,}\s*Original Message/i, /\r?\nFrom:\s/i, /\r?\n>/, /A message regarding case/i];
+  let idx = b.length;
+  for (const re of cuts) { const m = b.match(re); if (m && m.index >= 0 && m.index < idx) idx = m.index; }
+  return b.slice(0, idx).trim();
+}
+async function relayMessageReply(cs, fromAddr, body) {
+  const fromLc = (fromAddr || '').toLowerCase();
+  const provEmails = (await resolveOwnerEmails(cs, 'provider')).map(e => e.toLowerCase());
+  const attyEmails = (await resolveOwnerEmails(cs, 'attorney')).map(e => e.toLowerCase());
+  let toEmails = [], fromRole = 'party', toRole = 'other';
+  if (provEmails.includes(fromLc)) { toEmails = attyEmails; fromRole = 'provider'; toRole = 'attorney'; }
+  else if (attyEmails.includes(fromLc)) { toEmails = provEmails; fromRole = 'attorney'; toRole = 'provider'; }
+  else { toEmails = attyEmails.length ? attyEmails : provEmails; } // unknown sender -> best-effort to a known party
+  if (!toEmails.length) { console.log(`  reply on ${cs.case_id}: no counterparty email on file`); return; }
+  const reply = stripQuote(body).slice(0, 5000);
+  if (!reply) { console.log(`  reply on ${cs.case_id}: empty after stripping quotes`); return; }
+  const label = fromRole === 'provider' ? "the patient's provider" : fromRole === 'attorney' ? "the referring attorney's office" : 'the other party';
+  const text = `A message regarding case ${cs.case_id}, relayed through MDconcierge:\n\n${reply}`;
+  await sendMail(toEmails.join(', '), `[${cs.case_id}] Message from ${label}`, text, emailHtml(text, [], caseFooter(cs.case_id)));
+  await logAudit(cs.id, `message_${fromRole}_to_${toRole}`, 'reply relayed');
+  console.log(`  relayed message reply on ${cs.case_id} (${fromRole} -> ${toRole})`);
+}
 async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
   // Only ever forward to a KNOWN party on this case — never an arbitrary address.
   const provEmails = (await resolveOwnerEmails(cs, 'provider')).map(e => e.toLowerCase());
@@ -1415,6 +1440,16 @@ async function main() {
             const scs = (await sbGet(`cases?select=id&case_id=eq.${sentM[2].toUpperCase()}`))[0];
             if (scs) { await markArtifactTransmitted(scs.id, sentM[1].trim()); console.log(`Marked artifact transmitted (sent direct) for ${sentM[2]}.`); }
           } catch (e) { console.error('  sent-confirm failed: ' + e.message); }
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
+        // A reply to a relayed party-to-party message → relay it to the other party (metadata only; body not stored)
+        const replyM = subject.match(/\[([A-Z]{2,4}-[A-Z]-\d{4}-\d+)\][^\n]*message from/i);
+        if (replyM && SVC) {
+          try {
+            const mcs = (await sbGet(`cases?select=*&case_id=eq.${replyM[1].toUpperCase()}`))[0];
+            if (mcs) await relayMessageReply(mcs, fromAddr, body);
+          } catch (e) { console.error('  message-reply relay failed: ' + e.message); }
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
         }
