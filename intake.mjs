@@ -1003,6 +1003,37 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
   return { forwarded: true, role: recipientRole };
 }
 
+// ── Excel Pharmacy (WC): route an Rx/records to Excel through MDconcierge, and relay Excel's
+// requests back to the case parties. Conduit only — attachments forwarded in-memory, not stored. ──
+const EXCEL_EMAIL = 'info@excelpharmacyservices.com';
+async function forwardToExcel(cs, fromAddr, body, docs) {
+  const attachments = (docs || []).map((a, i) => ({ filename: a.filename || `document-${i + 1}`, content: a.content, contentType: a.contentType || 'application/octet-stream' }));
+  const fileList = (docs || []).map(a => a.filename || 'document').join(', ');
+  const msg = stripQuote(body || '').slice(0, 4000);
+  let note = `Hello Excel Pharmacy team,\n\nThis is coming to you through the MDconcierge network (reference ${cs.case_id}).`;
+  if (fileList) note += ` Attached: ${fileList}.`;
+  if (msg) note += `\n\n${msg}`;
+  note += `\n\nIf you need medical records or any additional information, just reply to this email — MDconcierge will route your request directly to the prescribing provider or the attorney and get you what you need. Thank you.`;
+  await transporter.sendMail({
+    from: `MDconcierge <${ZOHO_USER}>`, replyTo: `MDconcierge <${ZOHO_USER}>`,
+    to: EXCEL_EMAIL, subject: `WC Rx via MDconcierge network — ${cs.case_id}`,
+    text: note + signatureText(), html: emailHtml(note, [], caseFooter(cs.case_id)),
+    attachments, headers: { 'X-MDC-Auto': 'forward' },
+  });
+  await logAudit(cs.id, 'pharmacy_routed_excel', fileList || 'message');
+  console.log(`  routed to Excel Pharmacy for ${cs.case_id} (${fileList || 'message'})`);
+}
+async function relayExcelRequest(cs, body) {
+  const provEmails = await resolveOwnerEmails(cs, 'provider');
+  const attyEmails = await resolveOwnerEmails(cs, 'attorney');
+  const to = [...new Set([...(provEmails || []), ...(attyEmails || [])])].filter(e => e && /@/.test(e));
+  if (!to.length) { console.log(`  Excel request on ${cs.case_id}: no party email on file`); return; }
+  const reply = stripQuote(body || '').slice(0, 5000) || '(see the request from Excel Pharmacy)';
+  const text = `Hello,\n\nExcel Pharmacy has a request regarding the medication for case ${cs.case_id}:\n\n${reply}\n\nReply to this email with what they need (records, a clarification, etc.) and we'll route it straight back to Excel. Thank you.`;
+  await sendMail(to.join(', '), `[${cs.case_id}] Excel Pharmacy needs info`, text, emailHtml(text, [], caseFooter(cs.case_id)));
+  await logAudit(cs.id, 'pharmacy_request_relayed', 'Excel -> parties');
+  console.log(`  relayed Excel request on ${cs.case_id} to parties`);
+}
 // ── Self-serve onboarding: send the sign-up-form link to people Eric invites from the dashboard ──
 async function draftSignupInvite(name, type) {
   const what = type === 'attorney' ? 'attorney network' : 'provider network';
@@ -1450,6 +1481,18 @@ async function main() {
             const mcs = (await sbGet(`cases?select=*&case_id=eq.${replyM[1].toUpperCase()}`))[0];
             if (mcs) await relayMessageReply(mcs, fromAddr, body);
           } catch (e) { console.error('  message-reply relay failed: ' + e.message); }
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
+        // Excel Pharmacy: a request FROM Excel → relay to the case parties (provider + attorney)
+        if (docRefM && /@excelpharmacyservices\.com/i.test(fromAddr) && SVC) {
+          try { const ec = (await sbGet(`cases?select=*&case_id=eq.${docRefM[1].toUpperCase()}`))[0]; if (ec) await relayExcelRequest(ec, body); } catch (e) { console.error('  Excel request relay failed: ' + e.message); }
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          continue;
+        }
+        // Excel Pharmacy: a provider/attorney routing an Rx (or info) TO Excel through us → forward it on
+        if (docRefM && /excel\s*pharmacy/i.test(subject) && SVC) {
+          try { const ec = (await sbGet(`cases?select=*&case_id=eq.${docRefM[1].toUpperCase()}`))[0]; if (ec) await forwardToExcel(ec, fromAddr, body, docs); } catch (e) { console.error('  Excel forward failed: ' + e.message); }
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
         }
