@@ -43,7 +43,7 @@ jobs:
           END=$((SECONDS+3240))   # 54 minutes
           while [ $SECONDS -lt $END ]; do
             node intake.mjs || echo "intake pass errored (continuing loop)"
-            sleep 90
+            sleep 20
           done
       - name: Re-launch the loop (continuous coverage)
         if: always()
