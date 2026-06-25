@@ -260,34 +260,34 @@ function signatureText(){
 }
 function signatureHtml(){
   return `<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e3e6ea;font-family:Arial,Helvetica,sans-serif;">`
-    + `<div style="font-size:14px;color:#1a2230;margin-bottom:12px;">Warm regards,</div>`
+    + `<div style="font-size:14px;color:#14213D;margin-bottom:12px;">Warm regards,</div>`
     + `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr>`
     + `<td style="vertical-align:middle;padding-right:14px;"><img src="https://mdconcierge.net/logo.jpg" alt="MDconcierge" width="54" height="54" style="display:block;border-radius:8px;"></td>`
-    + `<td style="vertical-align:middle;border-left:3px solid #c8922a;padding-left:14px;">`
-    +   `<div style="font-size:16px;font-weight:bold;color:#0f1e3d;">Eric Weiscarger</div>`
+    + `<td style="vertical-align:middle;border-left:3px solid #6B95D4;padding-left:14px;">`
+    +   `<div style="font-size:16px;font-weight:bold;color:#08214C;">Eric Weiscarger</div>`
     +   `<div style="font-size:11px;font-weight:bold;letter-spacing:1px;color:#6B9FD4;">FOUNDER &middot; MDCONCIERGE</div>`
     +   `<div style="font-size:12px;color:#444;line-height:1.7;margin-top:6px;">`
-    +     (ERIC_CELL ? `&#128241; <a href="tel:${ERIC_CELL_DIGITS}" style="color:#0f1e3d;text-decoration:none;">${ERIC_CELL}</a><br>` : '')
-    +     `&#9993; <a href="mailto:referrals@mdconcierge.net" style="color:#0f1e3d;text-decoration:none;">referrals@mdconcierge.net</a><br>`
-    +     `&#127760; <a href="https://mdconcierge.net" style="color:#c8922a;text-decoration:none;font-weight:bold;">mdconcierge.net</a>`
+    +     (ERIC_CELL ? `&#128241; <a href="tel:${ERIC_CELL_DIGITS}" style="color:#08214C;text-decoration:none;">${ERIC_CELL}</a><br>` : '')
+    +     `&#9993; <a href="mailto:referrals@mdconcierge.net" style="color:#08214C;text-decoration:none;">referrals@mdconcierge.net</a><br>`
+    +     `&#127760; <a href="https://mdconcierge.net" style="color:#2F5EA8;text-decoration:none;font-weight:bold;">mdconcierge.net</a>`
     +   `</div>`
     + `</td></tr></table></div>`;
 }
 function emailHtml(bodyText, buttons, extra){
   const para='<p style="margin:0 0 14px;">'+escEmail(bodyText).replace(/\n\n+/g,'</p><p style="margin:0 0 14px;">').replace(/\n/g,'<br>')+'</p>';
   const btns=(buttons&&buttons.length)?('<div style="margin-top:6px;">'+buttons.map(b=>`<a href="${b.href}" style="display:inline-block;padding:11px 20px;margin:6px 10px 6px 0;background:${b.color};color:${b.text};text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;">${escEmail(b.label)}</a>`).join('')+'</div>'):'';
-  return `<!doctype html><html><body style="margin:0;background:#f4f5f7;font-family:'Segoe UI',Arial,sans-serif;">`
+  return `<!doctype html><html><body style="margin:0;background:#F6F9FD;font-family:'Segoe UI',Arial,sans-serif;">`
     +`<div style="max-width:560px;margin:0 auto;padding:22px;">`
-    +`<div style="background:#0b0f14;border-radius:12px 12px 0 0;padding:18px 24px;"><span style="font-size:20px;font-weight:800;color:#ffffff;">MD<span style="color:#c8922a;">concierge</span></span><div style="color:#8e97a3;font-size:12px;margin-top:2px;">Medical-Legal Coordination</div></div>`
-    +`<div style="background:#ffffff;border:1px solid #e3e6ea;border-top:none;border-radius:0 0 12px 12px;padding:22px 24px;color:#1a2230;font-size:14px;line-height:1.6;">${para}${btns}${extra||''}${signatureHtml()}</div>`
+    +`<div style="background:#08214C;border-radius:12px 12px 0 0;padding:18px 24px;"><img src="https://mdconcierge.net/assets/brand/logo-white.png" alt="MDconcierge" style="height:32px;display:block;"><div style="color:#9fb6da;font-size:12px;margin-top:6px;">Medical-Legal Coordination</div></div>`
+    +`<div style="background:#ffffff;border:1px solid #DCE6F2;border-top:none;border-radius:0 0 12px 12px;padding:22px 24px;color:#14213D;font-size:14px;line-height:1.6;">${para}${btns}${extra||''}${signatureHtml()}</div>`
     +`<div style="text-align:center;color:#9aa3af;font-size:11px;padding:14px;">MDconcierge &middot; referrals@mdconcierge.net</div>`
     +`</div></body></html>`;
 }
-function mailtoBtn(label, subject, body, color, text){return {label,href:`mailto:referrals@mdconcierge.net?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,color:color||'#c8922a',text:text||'#1a1305'};}
+function mailtoBtn(label, subject, body, color, text){return {label,href:`mailto:referrals@mdconcierge.net?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,color:color||'#08214C',text:text||'#ffffff'};}
 function actionPills(ref){
   const items=[['🔬 Imaging / MRI','Imaging / MRI'],['🏃 Physical Therapy','Physical Therapy'],['🧠 Pain Management','Pain Management'],['🦴 Orthopaedic','Orthopaedic'],['🔄 Chiropractic','Chiropractic'],['💊 Pharmacy','Pharmacy'],['📋 Request records','Medical records'],['📄 Request bills','Billing'],['📡 Carrier relay','Carrier relay'],['➕ Other','Other ancillary service']];
   return '<div style="margin-top:16px;border-top:1px solid #e3e6ea;padding-top:12px;"><div style="font-size:12px;color:#6b7583;margin-bottom:8px;font-weight:600;">One-click requests — we handle the rest:</div>'
-    + items.map(([label,req])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Request: '+req+' — '+(ref||''))+'&body='+encodeURIComponent('Please coordinate '+req+' for referral '+(ref||'')+'.\n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#eef5fc;border:1px solid #b8d4ee;border-radius:12px;color:#1a2230;text-decoration:none;">${label}</a>`;}).join('')
+    + items.map(([label,req])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Request: '+req+' — '+(ref||''))+'&body='+encodeURIComponent('Please coordinate '+req+' for referral '+(ref||'')+'.\n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#EEF4FC;border:1px solid #DCE8F7;border-radius:12px;color:#14213D;text-decoration:none;">${label}</a>`;}).join('')
     + '</div>';
 }
 // ── Phase H: per-party live-status portal link ──
@@ -301,18 +301,18 @@ async function statusToken(cs) {
   try { if (SVC) await sbPatch(`cases?id=eq.${cs.id}`, { status_token: tok, status_token_exp: exp }); } catch (e) {}
   cs.status_token = tok; cs.status_token_exp = exp; return tok;
 }
-function statusBtn(tok) { return { label: '📊 View live status', href: 'https://mdconcierge.net/status.html?t=' + tok, color: '#1a2230', text: '#ffffff' }; }
+function statusBtn(tok) { return { label: '📊 View live status', href: 'https://mdconcierge.net/status.html?t=' + tok, color: '#08214C', text: '#ffffff' }; }
 function reportPills(ref){
   const items=[['Report UR','UR'],['Report IME','IME'],['Report IRE','IRE']];
   return '<div style="margin-top:12px;border-top:1px solid #e3e6ea;padding-top:10px;"><div style="font-size:12px;color:#6b7583;margin-bottom:6px;font-weight:600;">Report a case event — one tap and we handle the deadline:</div>'
-    + items.map(([label,t])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Report '+t+' — '+(ref||''))+'&body='+encodeURIComponent('Reporting a '+t+' for referral '+(ref||'')+'.\nDeadline / details: \n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#1a2230;border-radius:12px;color:#ffffff;text-decoration:none;">${label}</a>`;}).join('')
+    + items.map(([label,t])=>{const href='mailto:referrals@mdconcierge.net?subject='+encodeURIComponent('Report '+t+' — '+(ref||''))+'&body='+encodeURIComponent('Reporting a '+t+' for referral '+(ref||'')+'.\nDeadline / details: \n\n');return `<a href="${href}" style="display:inline-block;font-size:12px;padding:5px 11px;margin:3px 6px 3px 0;background:#08214C;border-radius:12px;color:#ffffff;text-decoration:none;">${label}</a>`;}).join('')
     + '</div>';
 }
 // Standard footer on EVERY case email: action bar (requests + report) + a link to review all their cases.
 // (The case-specific magic link is the email's primary button — accept link for providers, status link for attorneys.)
 function portalLinkHtml() {
   return '<div style="margin-top:14px;border-top:1px solid #e3e6ea;padding-top:12px;text-align:center;">'
-    + '<a href="https://mdconcierge.net/portal.html" style="color:#1a4e8a;font-weight:700;text-decoration:none;font-size:13px;">📋 Review all your cases in the MDconcierge portal</a></div>';
+    + '<a href="https://mdconcierge.net/portal.html" style="color:#2F5EA8;font-weight:700;text-decoration:none;font-size:13px;">📋 Review all your cases in the MDconcierge portal</a></div>';
 }
 function caseFooter(ref) { return actionPills(ref) + reportPills(ref) + portalLinkHtml(); }
 
@@ -586,8 +586,8 @@ async function followUpRouted() {
         if (cs.accept_token) {
           const link = 'https://mdconcierge.net/respond.html?t=' + cs.accept_token;
           btns.push({ label: '✅ Accept & view case', href: link + '&a=accept', color: '#2ecc8a', text: '#06351f' });
-          btns.push({ label: 'Scheduled', href: link + '&a=scheduled', color: '#eef5fc', text: '#1a2230' });
-          btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#eef5fc', text: '#1a2230' });
+          btns.push({ label: 'Scheduled', href: link + '&a=scheduled', color: '#EEF4FC', text: '#14213D' });
+          btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#EEF4FC', text: '#14213D' });
         }
         btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
         await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
@@ -702,7 +702,7 @@ async function pushProviderUpdates() {
         cs.injury_type ? `Injury / body part: ${cs.injury_type}` : '',
       ].filter(Boolean).join('\n');
       const text = `Hello,\n\nAn update on referral ${cs.case_id} — we've received additional case details:\n\n${lines}\n\nThis case and all its updates are live in your MDconcierge portal, where you can view everything anytime. Please let us know if you need anything else for billing or authorization.`;
-      const btns = [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#c8922a', text: '#1a1305' }, mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)];
+      const btns = [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#08214C', text: '#ffffff' }, mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)];
       await sendMail(emails.join(', '), `Case update — ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_update_pending: false });
       await logAudit(cs.id, 'provider_update_sent', null);
@@ -775,7 +775,7 @@ async function chaseGaps() {
       const text = await draftChase(byCase);
       const btns = [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')];
       const singleCs = nCases === 1 ? grp.items[0].cs : null;   // for one-case digests, let them self-serve the form
-      if (singleCs && singleCs.status_token) btns.unshift({ label: '✏️ Add the info yourself', href: 'https://mdconcierge.net/status.html?t=' + singleCs.status_token, color: '#c8922a', text: '#1a1305' });
+      if (singleCs && singleCs.status_token) btns.unshift({ label: '✏️ Add the info yourself', href: 'https://mdconcierge.net/status.html?t=' + singleCs.status_token, color: '#08214C', text: '#ffffff' });
       await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, btns, portalLinkHtml()));
       for (const it of grp.items) await sbPatch(`case_gaps?id=eq.${it.g.id}`, { touches: (it.g.touches || 0) + 1, next_touch: hoursFromNow(CHASE_INTERVAL_H), updated_at: new Date().toISOString() });
       sent++;
@@ -1058,7 +1058,7 @@ async function sendSignupInvites() {
       const link = `https://mdconcierge.net/signup.html?type=${inv.type === 'attorney' ? 'attorney' : 'provider'}`;
       const text = await draftSignupInvite(inv.name, inv.type);
       await sendMail(inv.email, 'Welcome to MDconcierge — quick onboarding', text,
-        emailHtml(text, [{ label: '📝 Complete onboarding', href: link, color: '#c8922a', text: '#1a1305' }]));
+        emailHtml(text, [{ label: '📝 Complete onboarding', href: link, color: '#08214C', text: '#ffffff' }]));
       await sbPatch(`signup_invites?id=eq.${inv.id}`, { status: 'sent', sent_at: new Date().toISOString() });
       try { await sbPost('audit_log', { case_id: null, action: 'signup_invite_sent', detail: `${inv.type}: ${inv.email}`, source: 'automation' }); } catch (e) {}
       sent++;
@@ -1205,7 +1205,7 @@ async function sendPortalLinks() {
         await sbPatch(`portal_accounts?id=eq.${a.id}`, { login_key: key });
         const link = 'https://mdconcierge.net/portal.html?key=' + key;
         const text = `Hello${a.name ? (' ' + a.name) : ''},\n\nHere's your secure sign-in link for the MDconcierge portal — just click to see your cases (no password needed):\n\n${link}\n\nThis link is just for you. If you didn't request it, you can safely ignore this email.`;
-        await sendMail(a.email, 'Your MDconcierge sign-in link', text, emailHtml(text, [{ label: '🔓 Open my portal', href: link, color: '#c8922a', text: '#1a1305' }]));
+        await sendMail(a.email, 'Your MDconcierge sign-in link', text, emailHtml(text, [{ label: '🔓 Open my portal', href: link, color: '#08214C', text: '#ffffff' }]));
         console.log(`  portal sign-in link sent to ${a.email}`);
       }
       await sbPatch(`portal_link_requests?id=eq.${r.id}`, { status: 'sent', sent_at: new Date().toISOString() });
@@ -1274,7 +1274,7 @@ async function sendPortalInvite(role, recordId, email, name, practiceId) {
   const what = role === 'provider' ? 'your MDconcierge referrals' : "the cases we're coordinating for your clients";
   const text = `Hello${name ? (' ' + name) : ''},\n\nYou can now manage ${what} from one secure portal — no more searching your inbox for the right link. Set a password below and you'll be able to sign in anytime to see your cases and act on them.\n\nThis setup link is unique to you and expires in ${PORTAL_SETUP_TTL_DAYS} days. If you weren't expecting this, you can safely ignore it.`;
   try {
-    await sendMail(r.email, 'Set up your MDconcierge portal login', text, emailHtml(text, [{ label: '🔐 Set up my login', href: r.link, color: '#c8922a', text: '#1a1305' }]));
+    await sendMail(r.email, 'Set up your MDconcierge portal login', text, emailHtml(text, [{ label: '🔐 Set up my login', href: r.link, color: '#08214C', text: '#ffffff' }]));
     console.log(`  portal invite sent to ${role} ${r.email}`);
   } catch (e) { console.error('  portal invite send failed: ' + e.message); }
 }
@@ -1334,7 +1334,7 @@ async function sendAttorneyDigests() {
     const text = `Hello,\n\nHere's where your active cases stand this week — ${list.length} in progress:\n\n${lines}\n\nWe're staying on top of each one. Just reply if you need anything, or want us to push something forward.`;
     try {
       await sendMail(email, `Your MDconcierge case update — ${list.length} active case${list.length === 1 ? '' : 's'}`, text,
-        emailHtml(text, [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#c8922a', text: '#1a1305' }], portalLinkHtml()));
+        emailHtml(text, [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#08214C', text: '#ffffff' }], portalLinkHtml()));
       await sbPost('audit_log', { case_id: null, action: 'attorney_digest', detail: tag, source: 'automation' });
       sent++;
       console.log(`  weekly digest → ${email} (${list.length} case(s)).`);
@@ -1391,7 +1391,7 @@ async function scanEricInbox() {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
-            if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#c8922a', text: '#1a1305' });
+            if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#08214C', text: '#ffffff' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
             const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, env.envelope?.messageId);  // reply goes FROM referrals@ → migrates them there
@@ -1565,7 +1565,7 @@ async function main() {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
-            if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#c8922a', text: '#1a1305' });
+            if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#08214C', text: '#ffffff' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
             const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
