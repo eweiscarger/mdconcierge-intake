@@ -1316,6 +1316,27 @@ async function sendPortalInvite(role, recordId, email, name, practiceId) {
   } catch (e) { console.error('  portal invite send failed: ' + e.message); }
 }
 
+// ── Storm guard: send any given alert at most once per signature per throttle window. ──
+// Prevents a repeating problem (or a bad deploy) from flooding the inbox every cycle.
+// Persisted in system_health so it holds across the fresh-process-per-cycle loop.
+// Fails CLOSED: if we can't read the throttle state, we suppress rather than risk a storm —
+// a sustained outage is still surfaced by the daily heartbeat NOT arriving.
+const ALERT_THROTTLE_H = Number(process.env.ALERT_THROTTLE_H || 3);
+async function maybeAlert(sig, subject, body) {
+  if (!SVC) return false;
+  let row;
+  try { row = (await sbGet(`system_health?select=last_alert_at,last_alert_sig&id=eq.1`))[0] || null; }
+  catch (e) { console.log('maybeAlert: state read failed — suppressing to avoid a storm: ' + e.message); return false; }
+  if (row && row.last_alert_sig === sig && row.last_alert_at) {
+    const ageH = (new Date().getTime() - new Date(row.last_alert_at).getTime()) / 3.6e6;
+    if (ageH < ALERT_THROTTLE_H) { console.log(`Alert suppressed (same issue ${ageH.toFixed(1)}h ago): ${sig}`); return false; }
+  }
+  try { await sendMail(ADMIN_EMAIL, subject, body, emailHtml(body, [])); } catch (e) { return false; }
+  const patch = { last_alert_at: new Date().toISOString(), last_alert_sig: sig };
+  try { if (row) await sbPatch(`system_health?id=eq.1`, patch); else await sbPost('system_health', { id: 1, ...patch }); } catch (e) {}
+  return true;
+}
+
 // ── Monitoring: heartbeat + alert Eric on errors, so the engine never fails silently ──
 async function healthReport() {
   if (!SVC) return;
@@ -1326,10 +1347,11 @@ async function healthReport() {
     if (row) await sbPatch(`system_health?id=eq.1`, { last_run_at: new Date().toISOString(), updated_at: new Date().toISOString() });
     else await sbPost('system_health', { id: 1, last_run_at: new Date().toISOString() });
   } catch (e) {}
-  // alert on any errors this run
+  // alert on any errors this run — throttled so the same issue can't flood the inbox
   if (RUN_ERRORS.length) {
     const body = `The MDconcierge coordination engine hit ${RUN_ERRORS.length} issue(s) on its last run (${new Date().toUTCString()}):\n\n- ${RUN_ERRORS.slice(0, 25).join('\n- ')}\n\nThe engine keeps running — this is a heads-up so nothing slips by unnoticed.`;
-    try { await sendMail(ADMIN_EMAIL, `⚠ MDconcierge engine: ${RUN_ERRORS.length} issue(s) this run`, body, emailHtml(body, [])); } catch (e) {}
+    const sig = 'run:' + [...new Set(RUN_ERRORS.map(e => String(e).slice(0, 40)))].sort().join('|').slice(0, 140);
+    await maybeAlert(sig, `⚠ MDconcierge engine: ${RUN_ERRORS.length} issue(s) this run`, body);
   }
   // once-a-day "still alive" confirmation (dead-man's switch: if these stop, something's wrong)
   if (!row || row.last_heartbeat_date !== today) {
@@ -1674,7 +1696,8 @@ main().catch(async (e) => {
   }
   try {
     const body = 'The MDconcierge coordination engine crashed on its last run:\n\n' + (e && e.stack ? e.stack : (e && e.message) || String(e)) + '\n\nIt will retry on the next cycle. If these keep coming, it needs a look.';
-    await sendMail(ADMIN_EMAIL, '🚨 MDconcierge engine — FATAL error', body, emailHtml(body, []));
+    const sig = 'fatal:' + String((e && e.message) || e).split('\n')[0].slice(0, 60);
+    await maybeAlert(sig, '🚨 MDconcierge engine — FATAL error', body);
   } catch (_) {}
   console.error('Fatal:', e);
   process.exit(1);
