@@ -1442,8 +1442,20 @@ async function scanEricInbox() {
 }
 
 async function main() {
-  const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
-  await client.connect();
+  const mkClient = () => new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
+  // Zoho occasionally throttles / is slow to greet; a couple of quick retries turn a
+  // transient blip into a non-event instead of a crash + alert email.
+  let client;
+  for (let attempt = 1; ; attempt++) {
+    client = mkClient();
+    try { await client.connect(); break; }
+    catch (e) {
+      try { client.close(); } catch (_) {}
+      if (attempt >= 3) throw e;
+      console.log(`IMAP connect attempt ${attempt} failed (${e.message}); retrying in 8s…`);
+      await new Promise(r => setTimeout(r, 8000));
+    }
+  }
   let created = 0, skipped = 0;
   const scanBoxes = ['INBOX'];
   try {
@@ -1648,7 +1660,18 @@ async function main() {
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
+// A transient mail-server connection blip (Zoho slow to greet / momentary throttle)
+// self-heals on the next cycle — it should NOT page Eric. A genuine sustained outage
+// is still surfaced by the daily heartbeat / watchdog dead-man's switch.
+function isTransientConn(e) {
+  const m = String((e && (e.message || e.code)) || '').toLowerCase();
+  return /greeting|timeout|etimedout|econnreset|econnrefused|enotfound|socket|network|connection/.test(m);
+}
 main().catch(async (e) => {
+  if (isTransientConn(e)) {
+    console.error('Transient connection issue — skipping alert, will retry next cycle:', (e && e.message) || e);
+    process.exit(1);
+  }
   try {
     const body = 'The MDconcierge coordination engine crashed on its last run:\n\n' + (e && e.stack ? e.stack : (e && e.message) || String(e)) + '\n\nIt will retry on the next cycle. If these keep coming, it needs a look.';
     await sendMail(ADMIN_EMAIL, '🚨 MDconcierge engine — FATAL error', body, emailHtml(body, []));

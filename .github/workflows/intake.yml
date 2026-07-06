@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-audit --no-fund
-      - name: Process inbox on a ~90s loop for ~54 minutes
+      - name: Process inbox on a ~60s loop for ~54 minutes
         env:
           ZOHO_USER: ${{ secrets.ZOHO_USER }}
           ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
@@ -43,7 +43,7 @@ jobs:
           END=$((SECONDS+3240))   # 54 minutes
           while [ $SECONDS -lt $END ]; do
             node intake.mjs || echo "intake pass errored (continuing loop)"
-            sleep 20
+            sleep 60
           done
       - name: Re-launch the loop (continuous coverage)
         if: always()
