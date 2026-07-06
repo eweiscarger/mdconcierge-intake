@@ -932,6 +932,43 @@ async function handleEvents() {
   if (sent) console.log(`Case events handled: ${sent}.`);
 }
 
+// ── In-portal cross-party requests: a provider or attorney submits a request from
+// their own case page (respond.html / status.html); we email the OTHER party by email.
+// PII-safe: references the case code only (both parties are already on the case).
+async function notifyCaseRequests() {
+  if (!SVC) return;
+  let reqs = [];
+  try { reqs = await sbGet(`case_requests?select=*&notified_at=is.null&order=created_at.asc`); }
+  catch (e) { console.error('requests: query failed: ' + e.message); return; }
+  let sent = 0;
+  for (const rq of reqs) {
+    try {
+      const cs = (await sbGet(`cases?select=*&id=eq.${rq.case_id}`))[0];
+      if (!cs) { await sbPatch(`case_requests?id=eq.${rq.id}`, { notified_at: new Date().toISOString() }); continue; }
+      // a request FROM one party is directed TO the other party
+      const toOwner = rq.from_role === 'provider' ? 'attorney' : 'provider';
+      const emails = await resolveOwnerEmails(cs, toOwner);
+      if (!emails.length) continue; // hold until we can reach them (e.g. no provider routed yet)
+      const fromLabel = rq.from_role === 'provider' ? 'The treating provider' : 'The referring attorney';
+      const note = rq.message ? `\n\nTheir note: "${rq.message}"` : '';
+      const text = `Hello,\n\n${fromLabel} on referral ${cs.case_id} has sent you a request through MDconcierge:\n\n• ${rq.request_type}${note}\n\nYou can review and respond from your case page using the button below, or simply reply to this email and we'll relay it. Thank you.`;
+      const btns = [];
+      if (toOwner === 'attorney') {
+        const stok = await statusToken(cs);
+        if (stok) btns.push({ label: '📋 Open case & respond', href: 'https://mdconcierge.net/status.html?t=' + stok, color: '#08214C', text: '#ffffff' });
+      } else if (cs.accept_token) {
+        btns.push({ label: '📋 Open case & respond', href: 'https://mdconcierge.net/respond.html?t=' + cs.accept_token, color: '#08214C', text: '#ffffff' });
+      }
+      btns.push(mailtoBtn('Reply by email', `RE request — ${cs.case_id}`, `Hello,\n\nRegarding the request on ${cs.case_id}:\n\n`));
+      await sendMail(emails.join(', '), `A request on your referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
+      await sbPatch(`case_requests?id=eq.${rq.id}`, { notified_at: new Date().toISOString() });
+      await logAudit(cs.id, 'request_notified', `${rq.request_type} → ${toOwner}`);
+      sent++;
+    } catch (e) { console.error(`  request ${rq.id} failed: ${e.message}`); }
+  }
+  if (sent) console.log(`Case requests notified: ${sent}.`);
+}
+
 // ── Phase E(b): conduit document forwarding — NEVER STORED ──
 // We forward inbound documents to the case's counterparty in-memory and discard them.
 // Nothing is written to disk or the database; we only record that a transmission occurred.
@@ -1594,6 +1631,7 @@ async function main() {
   await escalateUnreachable();
   await emailArtifactRequests();
   await handleEvents();
+  await notifyCaseRequests();
   await sendSignupInvites();
   await sendProfileChangeNotices();
   await sendPortalLinks();
