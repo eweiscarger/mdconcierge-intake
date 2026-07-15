@@ -1347,11 +1347,19 @@ async function healthReport() {
     if (row) await sbPatch(`system_health?id=eq.1`, { last_run_at: new Date().toISOString(), updated_at: new Date().toISOString() });
     else await sbPost('system_health', { id: 1, last_run_at: new Date().toISOString() });
   } catch (e) {}
-  // alert on any errors this run — throttled so the same issue can't flood the inbox
+  // alert on REAL errors this run — but never on transient network/upstream blips (they self-heal
+  // next cycle, and a sustained outage is caught by the heartbeat + watchdog). Throttled per issue.
   if (RUN_ERRORS.length) {
-    const body = `The MDconcierge coordination engine hit ${RUN_ERRORS.length} issue(s) on its last run (${new Date().toUTCString()}):\n\n- ${RUN_ERRORS.slice(0, 25).join('\n- ')}\n\nThe engine keeps running — this is a heads-up so nothing slips by unnoticed.`;
-    const sig = 'run:' + [...new Set(RUN_ERRORS.map(e => String(e).slice(0, 40)))].sort().join('|').slice(0, 140);
-    await maybeAlert(sig, `⚠ MDconcierge engine: ${RUN_ERRORS.length} issue(s) this run`, body);
+    const real = RUN_ERRORS.filter(e => !isTransientMsg(e));
+    const transientN = RUN_ERRORS.length - real.length;
+    if (transientN) console.log(`healthReport: ${transientN} transient blip(s) this run — logged, not alerted.`);
+    if (real.length) {
+      const body = `The MDconcierge coordination engine hit ${real.length} issue(s) on its last run (${new Date().toUTCString()}):\n\n- ${real.slice(0, 25).join('\n- ')}\n\nThe engine keeps running — this is a heads-up so nothing slips by unnoticed.\n\n(Transient network blips this run, suppressed: ${transientN}.)`;
+      // Signature strips digits (case ids, counts) so a rotating set of the SAME class of error
+      // collapses to ONE throttled signature instead of a new email each run.
+      const sig = 'run:' + [...new Set(real.map(e => String(e).replace(/\d+/g, '#').slice(0, 40)))].sort().join('|').slice(0, 140);
+      await maybeAlert(sig, `⚠ MDconcierge engine: ${real.length} issue(s) this run`, body);
+    }
   }
   // once-a-day "still alive" confirmation (dead-man's switch: if these stop, something's wrong)
   if (!row || row.last_heartbeat_date !== today) {
@@ -1682,13 +1690,16 @@ async function main() {
   console.log(`Done. Created ${created} lead(s), skipped ${skipped} non-referral(s).`);
 }
 
-// A transient mail-server connection blip (Zoho slow to greet / momentary throttle)
-// self-heals on the next cycle — it should NOT page Eric. A genuine sustained outage
-// is still surfaced by the daily heartbeat / watchdog dead-man's switch.
-function isTransientConn(e) {
-  const m = String((e && (e.message || e.code)) || '').toLowerCase();
-  return /greeting|timeout|etimedout|econnreset|econnrefused|enotfound|socket|network|connection/.test(m);
-}
+// A transient connection blip — a mail-server greeting delay, or a momentary network/upstream
+// hiccup reaching Supabase/Anthropic from the runner (undici's "fetch failed", a 429/502/503/504,
+// a reset socket) — self-heals on the next cycle and should NOT page Eric. A genuine SUSTAINED
+// outage is still surfaced by the daily heartbeat not arriving + the independent watchdog.
+// NOTE: defined as a shared string test so BOTH the FATAL crash path AND the per-run heads-up
+// (healthReport) classify errors the same way. Previously only the FATAL path filtered these,
+// so transient blips flooded the inbox via the heads-up alert.
+const TRANSIENT_RE = /greeting|timeout|etimedout|econnreset|econnrefused|enotfound|eai_again|ehostunreach|epipe|socket|network|connection|fetch\s*failed|und_err|undici|terminated|aborted|throttl|rate.?limit|overloaded|\b(?:429|502|503|504)\b/;
+function isTransientMsg(s) { return TRANSIENT_RE.test(String(s || '').toLowerCase()); }
+function isTransientConn(e) { return isTransientMsg((e && (e.message || e.code)) || ''); }
 main().catch(async (e) => {
   if (isTransientConn(e)) {
     console.error('Transient connection issue — skipping alert, will retry next cycle:', (e && e.message) || e);
