@@ -1,0 +1,33 @@
+name: MDRx inbox assistant
+# Reads eric@mdconcierge.net for MDRx replies and queues drafts (read-only, SENDS NOTHING).
+# Completely separate from the referrals@ intake engine (intake.yml).
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '*/15 * * * *'   # every ~15 minutes (GitHub may delay)
+
+concurrency:
+  group: mdrx-inbox
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Scan eric@ for MDRx replies and queue drafts
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node mdrx-inbox.mjs
