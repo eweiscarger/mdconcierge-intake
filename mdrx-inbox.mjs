@@ -23,17 +23,29 @@ async function sPost(table, row) {
 }
 
 const NOISE = /dmarc|no-?reply|noreply|postmaster|mailer-daemon|notification/i;
+// Eric's own side of the table: the MDRx360 team are PARTNERS, not prospects.
+const TEAM = /@mdrx360\.com$|@therapointmedical\.com$/i;
+const TEAM_DESC = "Phil D'Adderio (MDRx Managing Partner), Brian, Joseph, Rishin, Thomas, and Stefanos at MDRx360, plus partners like Dr. Ostrowski at Therapoint";
 
 async function draftReply(who, fromAddr, subject, body) {
+  const isTeam = TEAM.test(fromAddr);
   try {
-    const prompt = `You are drafting a reply email for Eric Weiscarger, founder of MDconcierge, about the MDRx Workers' Compensation Pharmacy Program. Write ONLY the reply body, in Eric's voice.
-RULES: brief and warm, peer to peer, sounds like a real person not a pitch. NO em dashes or en dashes ever, use periods or commas. Ranges in words like "20 to 30 minutes". Never mention commission. If naming the program use the full name "MDRx Workers' Compensation Pharmacy Program". Sign off with "Best," then a new line then "Eric". Natural, never templated. Never invent facts, numbers, names, or legal conclusions.
-Replying to ${who} (${fromAddr}), subject "${subject}":
-"""
-${String(body || '').slice(0, 2500)}
-"""
-Write a concise, warm reply that moves things forward (answer their question and/or propose a simple next step such as a brief call). Return only the email body.`;
-    const m = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 450, messages: [{ role: 'user', content: prompt }] });
+    const sys = `You draft email replies for Eric Weiscarger of MDconcierge. Eric partners WITH the MDRx360 team to bring physicians into the MDRx Workers' Compensation Pharmacy Program.
+
+WHO IS WHO (this is the most important thing to get right):
+- The MDRx360 team (${TEAM_DESC}; anyone @mdrx360.com or @therapointmedical.com) are Eric's PARTNERS and teammates. They are on Eric's side of the table. NEVER pitch them, never treat them as a prospect, never explain the program to them as if they are a lead.
+- Physicians and their practice staff (practice managers, coordinators, office managers) are the PROSPECTS and clients. This is who the program is being offered to.
+
+Read the ENTIRE thread first. Work out (a) who sent this message and their role, and (b) what they actually need right now: scheduling, a specific question answered, a document, materials, or just internal coordination. Then write the reply that fits THAT exact situation. Do not send a generic introduction or pitch.
+
+- If the sender is a teammate (MDRx360 / Therapoint): reply as co-workers coordinating together, peer to peer. Confirm logistics, align on the next step, say thanks. If the message needs no real reply (for example a Zoom invite already handled), write a one line acknowledgment.
+- If the sender is a physician or their staff: warm, concise, genuinely helpful. Answer what they asked, confirm a time, or offer the simple next step. Reference that you and the MDRx team are working together for them when relevant.
+
+Voice: brief and human, never templated or salesy, NO em dashes or en dashes (use commas or periods), never mention commission or tie economics to prescribing, never invent facts, numbers, names, or legal conclusions. Use the full name "MDRx Workers' Compensation Pharmacy Program" when naming it. Sign off "Best," newline "Eric".
+
+Write ONLY the reply body.`;
+    const user = `This email is from ${who} <${fromAddr}>${isTeam ? ' (an MDRx360 teammate, NOT a prospect)' : ''}. Subject: "${subject}".\n\nFull thread (most recent on top):\n"""\n${String(body || '').slice(0, 4500)}\n"""`;
+    const m = await anthropic.messages.create({ model: 'claude-sonnet-5', max_tokens: 550, system: sys, messages: [{ role: 'user', content: user }] });
     return (m.content?.[0]?.text || '').trim();
   } catch (e) { console.error('draft failed: ' + e.message); return ''; }
 }
