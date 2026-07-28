@@ -5,6 +5,7 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import Anthropic from '@anthropic-ai/sdk';
+import nodemailer from 'nodemailer';
 
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
 const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
@@ -81,12 +82,26 @@ async function main() {
   console.log(`MDRx inbox scan: ${scanned} scanned, ${created} new draft(s) queued.`);
 }
 
-main().catch(e => {
+// Notify Eric ONLY on a genuine (non-transient) failure, at most once per 3 hours.
+async function alertFailure(job, msg) {
+  try {
+    const rows = await sGet(`job_alerts?select=last_alert_at&job=eq.${job}`);
+    const last = rows[0]?.last_alert_at ? new Date(rows[0].last_alert_at).getTime() : 0;
+    if (Date.now() - last < 3 * 3600 * 1000) return; // throttle
+    const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+    await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: `[MDconcierge] the ${job} job hit a problem`, text: `The ${job} job failed with a non-transient error:\n\n${msg}\n\nIt retries on its schedule. Check the GitHub Actions logs if it persists.` });
+    await fetch(`${SUPABASE_URL}/rest/v1/job_alerts`, { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ job, last_alert_at: new Date().toISOString(), last_msg: msg.slice(0, 300) }) });
+    console.log(`alerted Eric about ${job} failure`);
+  } catch (e) { console.error('alertFailure error: ' + e.message); }
+}
+
+main().catch(async e => {
   const msg = String(e?.message || e);
   if (/greeting|connection|timeout|econnreset|econnrefused|enotfound|socket|network/i.test(msg)) {
     console.warn('Transient mail connection issue, skipping this run: ' + msg);
-    process.exit(0); // do not fail the workflow (and email Eric) on a transient blip
+    process.exit(0); // transient blip, no alert
   }
   console.error('Fatal: ' + (e?.stack || e));
-  process.exit(1);
+  await alertFailure('mdrx-inbox', msg);
+  process.exit(0); // we alert Eric ourselves; do not also trigger a GitHub failure email
 });
