@@ -1,8 +1,12 @@
 // enrich.mjs — always-on data-enrichment agent.
-// Sweeps the CRM for contacts missing an NPI (and, when found, fills phone/address/
-// specialty/credential too), looks each one up in the free NPPES NPI registry,
-// and QUEUES a confirmation for Eric in enrichment_suggestions. It writes NOTHING
-// to a contact directly — Eric confirms each match in the dashboard (human-in-the-loop).
+// Sweeps the CRM for contacts missing an NPI, looks each up in the free NPPES NPI
+// registry, and QUEUES a confirmation for Eric in enrichment_suggestions. Writes
+// NOTHING to a contact directly — Eric confirms each match (human-in-the-loop).
+//
+// Matching strategy: search by LAST NAME + STATE (not first name), because doctors
+// often register their NPI under a legal name that differs from the professional
+// name they use. Rank candidates by specialty + city + first-name similarity.
+// Never re-suggest an NPI Eric already rejected for that contact.
 // Runs on a schedule via GitHub Actions. No API key needed (NPPES is free/public).
 import nodemailer from 'nodemailer';
 
@@ -16,13 +20,15 @@ const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SE
 const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
 const sPost = async (t, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
 
-function normPhone(s) { return (s || '').replace(/[^\d]/g, ''); }
+const REGION_PA = /\bpa\b|philad|pennsylvania|lancaster|allentown|harrisburg|pittsburgh|western pa|lehigh|reading|scranton|wynnewood|malvern/i;
+function deriveState(p) { if (p.state) return String(p.state).toUpperCase(); if (REGION_PA.test(p.region || p.city || '')) return 'PA'; return null; }
 function pick(o, keys) { const r = {}; for (const k of keys) if (o[k] != null) r[k] = o[k]; return r; }
 
-// Query NPPES for a person; return normalized candidates.
-async function npiLookup({ first_name, last_name, state, city }) {
-  const params = new URLSearchParams({ version: '2.1', last_name, limit: '30' });
-  if (first_name) params.set('first_name', first_name.split(' ')[0]);
+// Search NPPES by last name, constrained by state when we can infer it.
+async function npiLookup({ last_name, first_name, state }) {
+  const params = new URLSearchParams({ version: '2.1', last_name, limit: '50' });
+  if (state) params.set('state', state);                 // catches legal-name variants (pro name != registered name)
+  else if (first_name) params.set('first_name', first_name.split(' ')[0]);
   const r = await fetch(`https://npiregistry.cms.hhs.gov/api/?${params.toString()}`);
   if (!r.ok) return [];
   const j = await r.json();
@@ -32,8 +38,7 @@ async function npiLookup({ first_name, last_name, state, city }) {
     const loc = (m.addresses || []).find((a) => a.address_purpose === 'LOCATION') || (m.addresses || [])[0] || {};
     return {
       npi: String(m.number), credentials: (b.credential || '').replace(/\./g, ''),
-      first_name: b.first_name, last_name: b.last_name,
-      specialty: tax.desc || null,
+      first_name: b.first_name, last_name: b.last_name, specialty: tax.desc || null,
       address: [loc.address_1, loc.address_2].filter(Boolean).join(' '),
       city: loc.city || null, state: loc.state || null, zip: (loc.postal_code || '').slice(0, 5) || null,
       office_phone: loc.telephone_number || null,
@@ -41,37 +46,44 @@ async function npiLookup({ first_name, last_name, state, city }) {
   });
 }
 
-// Score a candidate against the CRM record. Returns 'high' | 'medium' | 'low'.
-function score(cand, prov) {
+// Score a candidate. Specialty is the strongest signal when the name is registered differently.
+function score(cand, prov, stateUsed) {
   let s = 0;
-  if (prov.state && cand.state) s += (prov.state.toUpperCase() === cand.state.toUpperCase()) ? 2 : -1;
-  if (prov.city && cand.city) s += (prov.city.toLowerCase() === cand.city.toLowerCase()) ? 2 : 0;
-  if (prov.first_name && cand.first_name && prov.first_name.toLowerCase().startsWith(cand.first_name.toLowerCase().slice(0, 3))) s += 1;
-  if (prov.specialty && cand.specialty && cand.specialty.toLowerCase().includes((prov.specialty || '').toLowerCase().split(' ')[0])) s += 1;
+  const cs = stateUsed || prov.state;
+  if (cs && cand.state) s += (String(cs).toUpperCase() === String(cand.state).toUpperCase()) ? 2 : -2;
+  if (prov.city && cand.city && prov.city.toLowerCase() === cand.city.toLowerCase()) s += 2;
+  const w = (prov.specialty || '').toLowerCase().split(' ')[0];
+  if (w && cand.specialty && cand.specialty.toLowerCase().includes(w)) s += 2;
+  if (prov.first_name && cand.first_name && prov.first_name.toLowerCase().slice(0, 3) === cand.first_name.toLowerCase().slice(0, 3)) s += 1;
   return s >= 3 ? 'high' : s >= 1 ? 'medium' : 'low';
 }
 
 async function main() {
-  // Thin = has a usable name but no NPI. Need at least a last name to search.
-  const thin = await sGet(`mdrx_providers?select=id,first_name,last_name,specialty,city,state,practice_name,npi,suppressed&or=(npi.is.null,npi.eq.)&last_name=not.is.null&suppressed=not.eq.true&limit=400`);
+  const thin = await sGet(`mdrx_providers?select=id,first_name,last_name,specialty,city,state,region,practice_name,npi,suppressed&or=(npi.is.null,npi.eq.)&last_name=not.is.null&suppressed=not.eq.true&limit=400`);
   const open = await sGet('enrichment_suggestions?select=provider_id&status=eq.pending');
   const pending = new Set((open || []).map((x) => x.provider_id));
+  const rejected = await sGet('enrichment_suggestions?select=provider_id,found&status=eq.rejected');
+  const rejSet = new Set((rejected || []).map((x) => `${x.provider_id}:${x.found && x.found.npi}`)); // never re-suggest a rejected match
 
   let checked = 0, queued = 0;
   for (const p of thin) {
     if (queued >= PER_RUN) break;
     if (pending.has(p.id)) continue;
-    if (!p.last_name || (!p.state && !p.city && !p.practice_name)) continue; // nothing to disambiguate on
+    const st = deriveState(p);
+    if (!st && !p.first_name) continue; // need at least a state to search on, or a first name to narrow
     checked++;
     let cands = [];
-    try { cands = await npiLookup(p); } catch (e) { continue; }
+    try { cands = await npiLookup({ last_name: p.last_name, first_name: p.first_name, state: st }); } catch (e) { continue; }
+    cands = cands.filter((c) => !rejSet.has(`${p.id}:${c.npi}`));
     if (!cands.length) continue;
-    const ranked = cands.map((c) => ({ c, conf: score(c, p) })).sort((a, b) => ({ high: 3, medium: 2, low: 1 }[b.conf] - { high: 3, medium: 2, low: 1 }[a.conf]));
+    const ranked = cands.map((c) => ({ c, conf: score(c, p, st) })).sort((a, b) => ({ high: 3, medium: 2, low: 1 }[b.conf] - { high: 3, medium: 2, low: 1 }[a.conf]));
     const best = ranked[0];
-    if (best.conf === 'low' && ranked.length > 3) continue; // too ambiguous, skip rather than spam Eric
+    if (best.conf === 'low') continue; // with state + specialty ranking, a 'low' best means no real match; don't spam Eric
     const c = best.c;
-    const summary = `Found NPI ${c.npi} — ${c.first_name || ''} ${c.last_name || ''} ${c.credentials || ''}, ${c.specialty || 'specialty n/a'}, ${[c.city, c.state].filter(Boolean).join(', ')}${c.office_phone ? ' · ' + c.office_phone : ''}. ` +
-      (best.conf === 'high' ? 'Location and details line up.' : 'Location does not fully match the record — please verify this is the right person.');
+    const nameNote = (p.first_name && c.first_name && p.first_name.toLowerCase().slice(0, 3) !== c.first_name.toLowerCase().slice(0, 3))
+      ? ` Registered as "${c.first_name} ${c.last_name}" (differs from the name on file).` : '';
+    const summary = `Found NPI ${c.npi} — ${c.first_name || ''} ${c.last_name || ''} ${c.credentials || ''}, ${c.specialty || 'specialty n/a'}, ${[c.city, c.state].filter(Boolean).join(', ')}${c.office_phone ? ' · ' + c.office_phone : ''}.` +
+      nameNote + (best.conf === 'high' ? ' State and specialty line up.' : ' Please verify this is the right person.');
     const found = { ...pick(c, ['npi', 'credentials', 'specialty', 'address', 'city', 'state', 'zip', 'office_phone']), alternates: ranked.slice(1, 4).map((r) => r.c) };
     await sPost('enrichment_suggestions', { provider_id: p.id, found, summary, confidence: best.conf, source: 'npi_registry', status: 'pending' });
     queued++;
