@@ -38,7 +38,9 @@ Write a concise, warm reply that moves things forward (answer their question and
 }
 
 async function main() {
-  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email');
+  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email&lead_type=eq.mdrx');
+  const funnelP = await sGet('mdrx_providers?select=email&lead_type=eq.funnel');
+  const funnelEmails = new Set((funnelP || []).map(p => (p.email || '').toLowerCase()).filter(Boolean));
   const existing = await sGet('mdrx_inbox_drafts?select=message_uid');
   const seen = new Set((existing || []).map(d => d.message_uid));
   const byEmail = {}; (provs || []).forEach(p => { if (p.email) byEmail[p.email.toLowerCase()] = p; });
@@ -59,6 +61,7 @@ async function main() {
       const mid = env.messageId || ('uid:' + m.uid);
       if (seen.has(mid)) continue;
       if (NOISE.test(fromAddr) || fromAddr === 'referrals@mdconcierge.net' || fromAddr === 'eric@mdconcierge.net') continue;
+      if (funnelEmails.has(fromAddr)) continue; // funnel leads are handled by funnel-reply.mjs
       const prov = byEmail[fromAddr];
       const isMdrx = /@mdrx360\.com$/i.test(fromAddr) || prov || /mdrx|workers.?comp|workers compensation|pharmacy program/i.test(subject);
       if (!isMdrx) continue;
