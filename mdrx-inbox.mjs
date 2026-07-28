@@ -6,7 +6,7 @@
 //   workable (positive/neutral, anything not a clear decline or opt-out) -> Pipeline (Engaged), flag Eric, draft reply
 //   clear decline ("not interested")                                     -> Not Interested (no draft)
 //   opt-out ("unsubscribe","stop","take me off")                         -> Suppression, permanent (no draft)
-//   unsure between decline and opt-out                                   -> treat as opt-out
+//   unsure between decline and opt-out                                   -> flag for Eric's review (never auto-suppress on doubt)
 // Runs on a schedule via GitHub Actions.
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -52,7 +52,8 @@ You do TWO things and return STRICT JSON only, no prose:
 1) Classify the sender's reply sentiment as exactly one of:
    - "workable": positive or neutral. Interested, asking a question, scheduling, requesting materials, "tell me more", "let me check with my partner", or any internal teammate coordination. Anything that is NOT a clear decline or opt-out is workable.
    - "decline": a clear, polite no to the opportunity ("not interested", "we'll pass", "not a fit right now"), but WITHOUT asking to be removed from the list.
-   - "optout": asks to stop being contacted ("unsubscribe","take me off","stop emailing","remove me"). If you are UNSURE whether a message is a decline or an opt-out, choose "optout".
+   - "optout": EXPLICITLY asks to stop being contacted ("unsubscribe","take me off","stop emailing","remove me"). Only use optout when the request to stop is unmistakable and explicit.
+   If you cannot clearly tell whether a reply is a soft decline or a real opt-out, classify it "workable" and set hot=true so Eric reviews it himself. NEVER auto-suppress a contact on doubt; a permanent opt-out must be earned by an explicit request.
    A teammate message is always "workable".
 2) Set "hot": true if the reply is time-sensitive, high-intent (ready to move/sign/book), OR touches legal/compliance/regulatory matters that need Eric's careful eye. Otherwise false.
 3) "draft": Only for "workable" senders, write the reply body in Eric's voice. For "decline" or "optout", return "".
@@ -77,9 +78,8 @@ Return ONLY: {"sentiment":"...","hot":true|false,"draft":"..."}`;
 }
 
 async function main() {
-  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at&lead_type=eq.mdrx');
-  const funnelP = await sGet('mdrx_providers?select=email&lead_type=eq.funnel');
-  const funnelEmails = new Set((funnelP || []).map(p => (p.email || '').toLowerCase()).filter(Boolean));
+  // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
+  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type');
   const existing = await sGet('mdrx_inbox_drafts?select=message_uid');
   const seen = new Set((existing || []).map(d => d.message_uid));
   const supp = await sGet('suppressions?select=email');
@@ -102,7 +102,6 @@ async function main() {
       const mid = env.messageId || ('uid:' + m.uid);
       if (seen.has(mid)) continue;
       if (NOISE.test(fromAddr) || fromAddr === 'referrals@mdconcierge.net' || fromAddr === 'eric@mdconcierge.net') continue;
-      if (funnelEmails.has(fromAddr)) continue; // funnel leads handled by funnel-reply.mjs
       const prov = byEmail[fromAddr];
       const isTeam = TEAM.test(fromAddr);
       const isMdrx = isTeam || prov || /mdrx|workers.?comp|workers compensation|pharmacy program/i.test(subject);
