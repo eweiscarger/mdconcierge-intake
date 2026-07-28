@@ -1,0 +1,48 @@
+name: Outreach cadence (MANUAL)
+# The traffic-email sequencer. There is NO schedule on purpose: it ONLY runs when
+# you press "Run workflow" below (or ask Claude to trigger it). Even when run, it
+# just does a DRY PREVIEW until outreach_config.sending_enabled = true AND a real
+# mailing address is set. So pressing it now is safe: it shows who it WOULD email.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Only this intent tier (A, B, or C). Blank = all.'
+        required: false
+        default: ''
+      specialty:
+        description: 'Only this specialty (e.g. Orthopedics). Blank = all.'
+        required: false
+        default: ''
+      limit:
+        description: 'Max emails this run (blank = daily cap).'
+        required: false
+        default: ''
+
+concurrency:
+  group: cadence
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Run the cadence sequencer
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SLICE_TIER: ${{ github.event.inputs.tier }}
+          SLICE_SPECIALTY: ${{ github.event.inputs.specialty }}
+          SLICE_LIMIT: ${{ github.event.inputs.limit }}
+        run: node cadence.mjs
