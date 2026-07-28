@@ -80,6 +80,13 @@ async function main() {
     const best = ranked[0];
     if (best.conf === 'low') continue; // with state + specialty ranking, a 'low' best means no real match; don't spam Eric
     const c = best.c;
+    // Same last name in the same state is NOT enough (lots of Smiths in PA). Require the
+    // specialty OR the city to actually match, or we surface a same-name stranger. Leads
+    // that fail this need web-search enrichment, not the registry.
+    const specW = (p.specialty || '').toLowerCase().split(' ')[0];
+    const specOK = specW && c.specialty && c.specialty.toLowerCase().includes(specW);
+    const cityOK = p.city && c.city && p.city.toLowerCase() === c.city.toLowerCase();
+    if (!specOK && !cityOK) continue;
     const nameNote = (p.first_name && c.first_name && p.first_name.toLowerCase().slice(0, 3) !== c.first_name.toLowerCase().slice(0, 3))
       ? ` Registered as "${c.first_name} ${c.last_name}" (differs from the name on file).` : '';
     const summary = `Found NPI ${c.npi} — ${c.first_name || ''} ${c.last_name || ''} ${c.credentials || ''}, ${c.specialty || 'specialty n/a'}, ${[c.city, c.state].filter(Boolean).join(', ')}${c.office_phone ? ' · ' + c.office_phone : ''}.` +

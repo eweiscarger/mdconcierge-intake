@@ -4,7 +4,7 @@ name: Data enrichment agent
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '17 13 * * *'   # once daily ~9:17am ET (offset to avoid the top-of-hour crowd)
+    - cron: '17 13 1 * *'   # once a MONTH (1st, ~9:17am ET). NPI is nice-to-have, not urgent, so keep it quiet.
 
 concurrency:
   group: enrich
