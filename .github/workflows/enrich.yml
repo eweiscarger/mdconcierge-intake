@@ -1,0 +1,32 @@
+name: Data enrichment agent
+# Sweeps the CRM for contacts missing an NPI, looks them up in the free NPPES
+# registry, and queues confirmations for Eric. Writes NOTHING to a contact directly.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '17 13 * * *'   # once daily ~9:17am ET (offset to avoid the top-of-hour crowd)
+
+concurrency:
+  group: enrich
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Sweep thin contacts and queue enrichment suggestions
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node enrich.mjs
