@@ -48,9 +48,10 @@ function touch1Text(p, cfg) {
 function body(touch, p, cfg) {
   const l = links(p.funnel_token); const first = p.first_name || 'there';
   if (touch === 1) return touch1Text(p, cfg);
-  if (touch === 2) return `${first}, following up on the note about the 700 Pharmacy decision and the work-comp pharmacy overview. No agenda, I just think it's relevant to how ${p.practice_name || 'your practice'} already handles injured workers. The one-pager is here whenever you have a minute: ${l.overview}` + footer(cfg, p.funnel_token);
-  if (touch === 3) return `${first}, I'll leave it here so I'm not cluttering your inbox. If it's ever useful, the overview and the two legal write-ups answer most of the questions on their own: ${l.overview}. And if you'd rather talk it through, my calendar's open: ${l.book}.` + footer(cfg, p.funnel_token);
-  return `${first}, I'll close the loop here since I don't want to crowd your inbox. If the timing isn't right, no problem at all. If it's ever worth a look, the overview and the two legal write-ups are here: ${l.overview}, and my calendar's open if you'd rather talk: ${l.book}. Either way, I wish you and your patients well.` + footer(cfg, p.funnel_token);
+  const dr = `Dr. ${p.last_name || ''}`.trim();
+  if (touch === 2) return `${dr}, following up on my note about the Pennsylvania Supreme Court's 700 Pharmacy decision and what it means for practices that treat injured workers. No agenda. I think it is directly relevant to the work-comp prescriptions your practice already writes. The decision and a short overview of our program are here whenever you have a minute: ${l.overview}` + footer(cfg, p.funnel_token);
+  if (touch === 3) return `${dr}, I will keep this short. If it is ever useful, the decision and our program overview answer most of the questions on their own: ${l.overview}. And if you would rather talk it through, my calendar is open: ${l.book}` + footer(cfg, p.funnel_token);
+  return `${dr}, I will close the loop here so I am not crowding your inbox. If the timing is not right, no problem at all. If it is ever worth a look, the decision and program details are here: ${l.overview}, and my calendar is open if you would prefer to talk: ${l.book}. Either way, I wish you and your patients well.` + footer(cfg, p.funnel_token);
 }
 
 async function run() {
