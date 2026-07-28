@@ -103,4 +103,12 @@ async function main() {
   await client.logout();
   console.log(`Funnel reply scan: ${scanned} scanned, ${created} new, ${drafted} drafted.`);
 }
-main().catch(e => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
+main().catch(e => {
+  const msg = String(e?.message || e);
+  if (/greeting|connection|timeout|econnreset|econnrefused|enotfound|socket|network/i.test(msg)) {
+    console.warn('Transient mail connection issue, skipping this run: ' + msg);
+    process.exit(0); // do not fail the workflow (and email Eric) on a transient blip
+  }
+  console.error('Fatal: ' + (e?.stack || e));
+  process.exit(1);
+});

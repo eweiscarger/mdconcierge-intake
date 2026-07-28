@@ -4,8 +4,10 @@ name: Funnel reply agent
 # Separate from the referrals@ engine (intake.yml) and the MDRx inbox (mdrx-inbox.yml).
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: '*/15 * * * *'   # every ~15 minutes (GitHub may delay)
+  # No schedule: this scanner is dormant until outreach goes live. Two IMAP
+  # scanners polling eric@ every 15 min made Zoho throttle the connection.
+  # When sending starts, merge this into the single mdrx-inbox scanner instead
+  # of re-enabling a second concurrent connection.
 
 concurrency:
   group: funnel-reply
