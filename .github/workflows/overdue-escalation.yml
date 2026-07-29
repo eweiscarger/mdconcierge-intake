@@ -1,0 +1,29 @@
+name: Overdue escalation
+
+# Manager safety net. Every lead carries a next step and a date; if one goes 3 days past due
+# nobody is working it. A red banner on a page nobody opened is not a control, so this
+# escalates to the manager, grouped by owner. Each lead escalates once, then goes quiet.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '40 12 * * 1-5'   # weekday mornings, ~8:40am ET, after the cadence and next-move
+
+concurrency:
+  group: overdue-escalation
+  cancel-in-progress: false
+
+jobs:
+  escalate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Escalate anything past due
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+        run: node overdue-escalation.mjs
