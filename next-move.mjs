@@ -43,7 +43,7 @@ async function decide(ctx) {
       model: 'claude-sonnet-5', max_tokens: 1600, system: SYSTEM,
       messages: [{ role: 'user', content: 'Plan the next move for this lead:\n\n' + JSON.stringify(ctx) }],
     });
-    let raw = (m.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    let raw = ((m.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n') || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     const s = raw.indexOf('{'), e = raw.lastIndexOf('}');
     if (s < 0 || e < 0) { console.error('no json: ' + raw.slice(0, 120)); return null; }
     const o = JSON.parse(raw.slice(s, e + 1));
