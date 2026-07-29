@@ -25,6 +25,22 @@ const COMPLAINT = /\bspam\b|abuse report|feedback loop|complaint|reported as (sp
 const HARD = /\b5\.\d\.\d\b|\b55[0-4]\b|does not exist|user unknown|no such user|mailbox (unavailable|not found|does not exist)|address rejected|recipient (rejected|not found)|account.*(disabled|closed)|no mailbox|invalid recipient|unknown recipient/i;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
+// Why did it bounce? The remedy is completely different per cause, so classify before acting.
+//   dead      - the mailbox does not exist. No format change helps. Suppress + look up where they went.
+//   content   - the message was refused on content/format grounds. A plain-text retry is a
+//               legitimate fallback here, so queue ONE for Eric to approve.
+//   blocked   - the organisation has deliberately blocked us. We respect that: suppress, never retry.
+//   soft      - temporary (mailbox full, greylisting, throttling). Leave it; the next cadence run retries.
+function classifyBounce(blob) {
+  const code = (blob.match(/\b([45]\.\d{1,3}\.\d{1,3})\b/) || [])[1] || '';
+  if (/^4\./.test(code) || /\b4\d\d\b[^\d]{0,20}(temporar|try again|greylist|throttl|deferred)/i.test(blob)
+      || /mailbox full|over quota|quota exceeded|too many messages|rate limit/i.test(blob)) return { cause: 'soft', code };
+  if (/blocked using|blacklist|blocklist|denied by policy|policy reasons|rejected due to policy|access denied for this sender|sender blocked|not authorized to send/i.test(blob)) return { cause: 'blocked', code };
+  if (/^5\.6\./.test(code) || /content.?(filter|reject)|spam.?(score|content|filter)|message (content|body) rejected|high probability of spam|considered spam|virus|malformed|message size|too large/i.test(blob)) return { cause: 'content', code };
+  if (/^5\.[15]\./.test(code) || /does not exist|user unknown|no such user|mailbox (unavailable|not found|does not exist)|recipient (address )?rejected|invalid recipient|unknown recipient|no mailbox|account.*(disabled|closed)/i.test(blob)) return { cause: 'dead', code };
+  return { cause: 'dead', code };   // unclassified 5.x: treat as dead, which is the safe default
+}
+
 async function alertEric(subject, text) {
   try {
     const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
@@ -43,8 +59,10 @@ async function main() {
 
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS }, logger: false });
   await client.connect();
-  const lock = await client.getMailboxLock('INBOX', { readOnly: true });
-  const newHard = []; const complaints = []; const relocate = [];
+  // read-write: Eric does not want bounce notifications sitting in his inbox, so once a DSN
+  // is logged we file it away. Nothing else in the mailbox is touched.
+  const lock = await client.getMailboxLock('INBOX');
+  const newHard = []; const complaints = []; const relocate = []; const fileAway = []; const retryPlain = [];
   try {
     const total = client.mailbox?.exists || 0;
     const start = Math.max(1, total - 60);
@@ -62,22 +80,64 @@ async function main() {
       const isComplaint = COMPLAINT.test(blob);
       const isHard = HARD.test(blob);
       const targets = [...new Set((bodyText.match(EMAIL_RE) || []).map((e) => e.toLowerCase()))].filter((e) => ours.has(e));
-      const type = isComplaint ? 'complaint' : isHard ? 'hard' : 'soft';
-      await sPost('bounce_events', { email: targets[0] || null, bounce_type: type, message_uid: mid, subject: subject.slice(0, 200), occurred_at: env.date || new Date().toISOString() }, 'resolution=ignore-duplicates,return=minimal');
+      const { cause, code } = classifyBounce(blob);
+      const type = isComplaint ? 'complaint' : cause === 'soft' ? 'soft' : 'hard';
+      await sPost('bounce_events', { email: targets[0] || null, bounce_type: type, message_uid: mid, subject: subject.slice(0, 200), occurred_at: env.date || new Date().toISOString(), cause, status_code: code || null }, 'resolution=ignore-duplicates,return=minimal');
       seen.add(mid);
-      if (type === 'soft') continue; // temporary failures: log, do not suppress
+      fileAway.push(m.uid);         // logged, so get it out of Eric's inbox either way
+      if (type === 'soft') continue; // temporary failures: log, do not suppress, cadence retries on its own
+
       for (const e of targets) {
+        // CONTENT rejection: the address is fine, the message was refused on format grounds.
+        // Queue ONE plain-text retry for Eric to approve. Do not suppress the lead.
+        if (cause === 'content' && !isComplaint && emailToId[e]) {
+          retryPlain.push({ id: emailToId[e], email: e, code });
+          continue;
+        }
         if (!suppressed.has(e)) {
-          await sPost('suppressions', { email: e, reason: `${type} bounce`, source: 'bounce-scan', provider_id: emailToId[e] || null }, 'resolution=merge-duplicates,return=minimal');
+          await sPost('suppressions', { email: e, reason: `${cause} bounce${code ? ' ' + code : ''}`, source: 'bounce-scan', provider_id: emailToId[e] || null }, 'resolution=merge-duplicates,return=minimal');
           suppressed.add(e);
         }
         if (emailToId[e]) await sPatch(`mdrx_providers?id=eq.${emailToId[e]}`, { suppressed: true, funnel_stage: 'Unsubscribed', unsubscribed_at: new Date().toISOString(), funnel_next_date: null });
-        if (type === 'hard' && emailToId[e]) relocate.push(emailToId[e]);   // a hard bounce usually means they moved
+        // Only chase a DEAD mailbox. A deliberate block is their decision, and we honour it.
+        if (cause === 'dead' && emailToId[e]) relocate.push(emailToId[e]);
         if (type === 'hard') newHard.push(e); else complaints.push(e);
       }
     }
+    // File every processed DSN out of the inbox. Trash keeps it recoverable for 30 days,
+    // and bounce_events already holds the durable record.
+    if (fileAway.length) {
+      try { await client.messageMove(fileAway.join(','), 'Trash', { uid: true }); console.log(`filed ${fileAway.length} bounce notice(s) out of the inbox.`); }
+      catch (e) { console.error('could not file bounce notices: ' + e.message); }
+    }
   } finally { lock.release(); }
   await client.logout();
+
+  // Content rejections get ONE plain-text retry, queued for approval like any other send.
+  // body_html stays null so send-outreach falls back to the plain-text rendering.
+  let requeued = 0; const retryLines = [];
+  for (const r of retryPlain) {
+    try {
+      const open = await sGet(`mdrx_outbox?select=id&provider_id=eq.${r.id}&status=eq.pending`);
+      if (open && open.length) continue;                                     // already waiting on him
+      const prior = await sGet(`mdrx_outbox?select=id,touch_no,subject,body_text,plain_retry&provider_id=eq.${r.id}&status=eq.sent&order=id.desc&limit=1`);
+      const last = prior && prior[0];
+      if (!last || last.plain_retry) continue;                               // never retry a retry
+      const who = await sGet(`mdrx_providers?select=last_name,email&id=eq.${r.id}`);
+      await sPost('mdrx_outbox', {
+        provider_id: r.id, touch_no: last.touch_no, to_email: (who[0] || {}).email || r.email,
+        subject: last.subject, body_text: last.body_text, body_html: null,
+        status: 'pending', scheduled_date: new Date().toISOString().slice(0, 10), plain_retry: true,
+      });
+      requeued++;
+      retryLines.push(`- Dr. ${(who[0] || {}).last_name || r.email} (${r.code || 'content reject'})`);
+    } catch (e) { console.error(`plain-text requeue failed for ${r.email}: ${e.message}`); }
+  }
+  if (requeued) {
+    await alertEric(`[MDconcierge] ${requeued} message(s) refused on content, plain-text retry queued`,
+      `These were not dead addresses. The receiving server refused the formatted message, so a plain-text version is queued for your approval in the Cockpit:\n\n${retryLines.join('\n')}\n\n`
+      + `Nothing was sent. Nobody was suppressed. If a plain-text retry also fails, that address is left alone.`);
+  }
 
   // A hard bounce usually means the doctor left that practice. Check the NPI registry for
   // where they are now, constrained to PA. Anything found is QUEUED for Eric to confirm in
@@ -126,7 +186,10 @@ async function main() {
   const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
   const sends7 = (await sGet(`mdrx_outbox?select=id&status=eq.sent&sent_at=gte.${daysAgoISO(7)}`)).length;
   const hard7 = (await sGet(`bounce_events?select=id&bounce_type=eq.hard&occurred_at=gte.${daysAgoISO(7)}`)).length;
-  const rate = sends7 >= 10 ? hard7 / sends7 : 0;
+  // Need a real sample before a rate means anything. At 17 sends one guessed address is 6%,
+  // which would pause a healthy campaign over nothing. Complaints still pause instantly below.
+  const MIN_SAMPLE = 50;
+  const rate = sends7 >= MIN_SAMPLE ? hard7 / sends7 : 0;
   let paused = false, reason = '';
   if (complaints.length) { paused = true; reason = `spam complaint from ${complaints.join(', ')}`; }
   else if (rate >= 0.05) { paused = true; reason = `hard-bounce rate ${(rate * 100).toFixed(1)}% (${hard7}/${sends7}) over 7 days`; }
