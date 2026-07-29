@@ -36,6 +36,8 @@ Timing logic (today is ${today}):
 - Cold for a while: longer gap and a genuinely different angle, do not repeat the last touch.
 Pick a real date on or after ${today}.
 
+SCHEDULING (email and text drafts): asking a physician to send times, with no way to just book, is a run-around. Whenever the move involves talking, give BOTH options in the same breath: invite them to reply with times that suit them AND paste the lead's booking_link from the context so they can drop straight onto Eric's calendar. Never ask for times without including that link. If booking_link is null, ask for times only. Phrase it as an either/or, for example: "Reply with a few times that suit you and I'll work around your schedule, or grab a slot directly here: <booking_link>".
+
 ADDRESSING: The lead is a physician. ALWAYS address them as "Dr. [last name]" in the greeting (e.g., "Hi Dr. Rao,"), NEVER by first name. Only office staff, practice managers, and champions are addressed by first name, and those are not the lead here.
 
 Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes (use commas or periods). Never mention commission or tie economics to prescribing. Never invent facts, numbers, names, or legal conclusions. Name it in full: "MDRx Workers' Compensation Pharmacy Program". Keep the body short.
@@ -65,7 +67,7 @@ async function decide(ctx) {
 
 async function main() {
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,brief_sent_at,meeting_requested_at&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
@@ -90,6 +92,8 @@ async function main() {
       last_cta: p.funnel_last_cta, opens: p.funnel_open_count, clicked: p.funnel_clicked, booked: p.funnel_booked,
       touches_so_far: p.touch_count, last_touch_at: p.last_touch_at, current_next_step: p.next_step,
       engaged_at: p.engaged_at, has_email: !!p.email,
+      // Eric's tracked booking link for THIS lead. Any draft that offers a call must carry it.
+      booking_link: p.funnel_token ? `https://mdconcierge.net/go.html?p=${p.funnel_token}&to=book` : null,
       brief_sent_at: p.brief_sent_at, meeting_requested_at: p.meeting_requested_at,
       engagement_events: (events || []).map((e) => ({ event: e.event, page: e.page, link: e.link, cta: e.cta, when: e.created_at })),
       their_replies: (replies || []).map((r) => ({ said: r.snippet, sentiment: r.sentiment, when: r.received_at })),
