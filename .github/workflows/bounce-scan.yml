@@ -1,0 +1,32 @@
+name: Bounce and complaint monitor
+# Reads eric@ for bounces/complaints, auto-suppresses hard bounces, and auto-pauses
+# sending (with an alert) if the bounce rate spikes or a spam complaint lands.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '30 */3 * * *'   # every 3 hours
+
+concurrency:
+  group: bounce-scan
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Scan for bounces and complaints
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node bounce-scan.mjs
