@@ -40,11 +40,13 @@ Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes 
 async function decide(ctx) {
   try {
     const m = await anthropic.messages.create({
-      model: 'claude-sonnet-5', max_tokens: 700, system: SYSTEM,
+      model: 'claude-sonnet-5', max_tokens: 1600, system: SYSTEM,
       messages: [{ role: 'user', content: 'Plan the next move for this lead:\n\n' + JSON.stringify(ctx) }],
     });
-    const raw = (m.content?.[0]?.text || '').trim();
-    const o = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+    let raw = (m.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const s = raw.indexOf('{'), e = raw.lastIndexOf('}');
+    if (s < 0 || e < 0) { console.error('no json: ' + raw.slice(0, 120)); return null; }
+    const o = JSON.parse(raw.slice(s, e + 1));
     if (!o.draft || !o.recommended_date) return null;
     if (o.recommended_date < today) o.recommended_date = today;
     return o;
