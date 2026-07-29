@@ -32,6 +32,7 @@ Timing logic (today is ${today}):
 - Just engaged / opened the tool / clicked in the last day or two: move fast, 1-2 days out.
 - Opened but went quiet: 3-5 days out, gentle nudge or a new angle.
 - Booked a meeting: pre-call nurture a day or two before.
+- Sent the Executive Brief (brief_sent_at is set) but has NOT requested a meeting (meeting_requested_at is null) after about 3 or more days: a short, warm nudge that re-offers the 15-minute call and points back to the brief. Do not resend the brief, just prompt the next step.
 - Cold for a while: longer gap and a genuinely different angle, do not repeat the last touch.
 Pick a real date on or after ${today}.
 
@@ -64,7 +65,7 @@ async function decide(ctx) {
 
 async function main() {
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,brief_sent_at,meeting_requested_at&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
@@ -89,6 +90,7 @@ async function main() {
       last_cta: p.funnel_last_cta, opens: p.funnel_open_count, clicked: p.funnel_clicked, booked: p.funnel_booked,
       touches_so_far: p.touch_count, last_touch_at: p.last_touch_at, current_next_step: p.next_step,
       engaged_at: p.engaged_at, has_email: !!p.email,
+      brief_sent_at: p.brief_sent_at, meeting_requested_at: p.meeting_requested_at,
       engagement_events: (events || []).map((e) => ({ event: e.event, page: e.page, link: e.link, cta: e.cta, when: e.created_at })),
       their_replies: (replies || []).map((r) => ({ said: r.snippet, sentiment: r.sentiment, when: r.received_at })),
       tool_views: (quotes || []).map((q) => ({ views: q.view_count, first: q.first_viewed_at, last: q.last_viewed_at })),
