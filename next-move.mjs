@@ -37,7 +37,14 @@ Pick a real date on or after ${today}.
 
 ADDRESSING: The lead is a physician. ALWAYS address them as "Dr. [last name]" in the greeting (e.g., "Hi Dr. Rao,"), NEVER by first name. Only office staff, practice managers, and champions are addressed by first name, and those are not the lead here.
 
-Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes (use commas or periods). Never mention commission or tie economics to prescribing. Never invent facts, numbers, names, or legal conclusions. Name it in full: "MDRx Workers' Compensation Pharmacy Program". For emails, sign "Best," then a new line "Eric". Keep it short.`;
+Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes (use commas or periods). Never mention commission or tie economics to prescribing. Never invent facts, numbers, names, or legal conclusions. Name it in full: "MDRx Workers' Compensation Pharmacy Program". Keep the body short.
+
+For emails and texts, always close with EXACTLY this signature, each part on its own line (for a call, skip the signature and give talking points instead):
+Best,
+Eric Weiscarger
+Founder, MDconcierge
+Referral Management • Work Comp Pharmacy • Ancillary Coordination
+(570) 817-7569 • referrals@mdconcierge.net • mdconcierge.net`;
 
 async function decide(ctx) {
   try {
