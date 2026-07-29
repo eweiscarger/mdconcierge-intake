@@ -1,0 +1,35 @@
+name: News and content scout
+# Weekly: uses Claude web search to scan the standing sources for fresh, on-message
+# developments (villains = PBMs/TPAs/denials) and hot ancillary revenue opportunities,
+# drafts openers + intel in the locked voice, and queues them for Eric to approve.
+# SENDS NOTHING to prospects. Governed by MESSAGING_AND_CONTENT.md.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 12 * * 1'   # Mondays ~7-8am ET
+
+concurrency:
+  group: news-monitor
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Scout news and opportunities
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node news-monitor.mjs
