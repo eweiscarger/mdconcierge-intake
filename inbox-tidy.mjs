@@ -14,15 +14,16 @@ const AUTOMATION_FOLDER = 'Automation';   // where cadence sends go to live
 // ---- INBOX rules ----
 const ENGINE = /MDconcierge engine|engine RECOVERED|engine may be DOWN|issue\(s\) this run|daily health check|FATAL error/i;
 const TESTJUNK = /^(h|d|vv|test)$|Signature preview|CRM . send test|LIVETEST/i;
-const BOUNCE_FROM = /mailer-daemon|mailerdaemon|postmaster|mail delivery/i;
-const BOUNCE_SUBJ = /undeliverable|delivery status notification|failure notice|returned mail|delivery has failed|address not found|could ?n.?t be delivered|message not delivered/i;
+// NOTE: bounce notices are deliberately NOT handled here. bounce-scan reads them, classifies
+// the failure, suppresses or queues a retry, and trashes them itself once logged. This job used
+// to trash them too and ran 5 minutes before it, deleting roughly half of each day's DSNs
+// before they were ever classified.
 const DMARC = /dmarc/i;
 const CAL = /zohocalendar/i;
 
 function routeInbox(from, subject) {
   if (ENGINE.test(subject)) return { folder: 'Trash', why: 'engine notification' };
   if (TESTJUNK.test(subject.trim())) return { folder: 'Trash', why: 'test email' };
-  if (BOUNCE_FROM.test(from) || BOUNCE_SUBJ.test(subject)) return { folder: 'Trash', why: 'bounce notice' };
   if (DMARC.test(from) || DMARC.test(subject)) return { folder: 'Archive', why: 'DMARC report' };
   if (CAL.test(from)) return { folder: 'Notification', why: 'calendar notice' };
   return null;
