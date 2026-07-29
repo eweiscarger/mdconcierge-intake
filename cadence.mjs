@@ -85,6 +85,10 @@ async function run() {
   // Already-queued leads (avoid duplicates).
   const openBox = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
   const queued = new Set((openBox || []).map((x) => x.provider_id));
+  // The cap is a ceiling on what is WAITING for approval, not on what this run adds. Without
+  // this, a manual trigger on top of the scheduled run would silently double the batch.
+  const room = Math.max(0, cap - queued.size);
+  if (room === 0) { console.log(`queue builder ${today()}: ${queued.size} already awaiting approval, at the cap of ${cap}. Nothing queued.`); return; }
   const supp = await sGet('suppressions?select=email');
   const suppressed = new Set((supp || []).map((s) => (s.email || '').toLowerCase()));
 
@@ -110,7 +114,7 @@ async function run() {
 
   let queuedCount = 0; const practicesToday = new Set();
   for (const p of pool) {
-    if (queuedCount >= cap) break;
+    if (queuedCount >= room) break;
     if (queued.has(p.id)) continue;
     if (suppressed.has((p.email || '').toLowerCase())) continue;
     const prac = (p.practice_name || '').toLowerCase();
