@@ -45,8 +45,8 @@ async function run() {
   const cap = Number(process.env.BATCH_SIZE) || Number(cfg.daily_send_cap) || 20;
 
   // Recycle Not-Now leads whose recycle date arrived.
-  const rec = await sGet(`mdrx_providers?select=id&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
-  for (const r of rec) await sPatch(`mdrx_providers?id=eq.${r.id}`, { funnel_stage: 'Queued', touch_count: 0, next_step: 'Touch 1', funnel_next_date: today(), recycle_date: null });
+  const rec = await sGet(`mdrx_providers?select=id,recycle_round&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
+  for (const r of rec) await sPatch(`mdrx_providers?id=eq.${r.id}`, { funnel_stage: 'Queued', touch_count: 0, next_step: 'Touch 1', funnel_next_date: today(), recycle_date: null, recycle_round: (r.recycle_round || 0) + 1 });
 
   // Already-queued leads (avoid duplicates).
   const openBox = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
@@ -56,8 +56,11 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
+  // Approved news openers, for A/B-rotating a fresh angle into recycled leads' first touch.
+  const openers = await sGet(`mdrx_content_queue?select=id,draft_hook&status=eq.approved&kind=eq.opener&order=id.desc`);
+  let openerIdx = 0;
   let queuedCount = 0; const practicesToday = new Set();
   for (const p of pool) {
     if (queuedCount >= cap) break;
@@ -67,11 +70,22 @@ async function run() {
     if (prac && practicesToday.has(prac)) continue; // pace by practice: max one per office per run
     const touch = (p.touch_count || 0) + 1;
     if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
+    // A/B: a recycled lead's first touch leads with a fresh, approved news opener instead of repeating Touch 1.
+    let bodyText = touchBody(touch, p), contentId = null;
+    if (touch === 1 && (p.recycle_round || 0) > 0 && openers.length) {
+      const op = openers[openerIdx % openers.length]; openerIdx++;
+      if (op && op.draft_hook) {
+        const dr = `Dr. ${p.last_name || ''}`.trim();
+        bodyText = `${dr},\n\n${op.draft_hook}\n\nIf it is worth a look, my calendar is open: ${link(p.funnel_token || '', 'book')}, or just reply with any questions.\n\nBest,`;
+        contentId = op.id;
+      }
+    }
     await sPost('mdrx_outbox', {
       provider_id: p.id, touch_no: touch, to_email: p.email,
-      subject: SUBJECTS[touch] || SUBJECTS[4], body_text: touchBody(touch, p), body_html: null,
-      status: 'pending', scheduled_date: today(),
+      subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText, body_html: null,
+      status: 'pending', scheduled_date: today(), content_id: contentId,
     });
+    if (contentId) { const cur = await sGet(`mdrx_content_queue?select=used_count&id=eq.${contentId}`); await sPatch(`mdrx_content_queue?id=eq.${contentId}`, { used_count: ((cur[0] && cur[0].used_count) || 0) + 1 }); }
     if (prac) practicesToday.add(prac);
     queued.add(p.id); queuedCount++;
   }
