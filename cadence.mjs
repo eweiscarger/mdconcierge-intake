@@ -51,7 +51,7 @@ function touchBody(touch, p) {
   return `${dr},\n\nI will close the loop here so I am not crowding your inbox. If the timing is not right, no problem at all. If it is ever worth a look, the decision and program details are here: ${link(t, 'program')}, and my calendar is open if you would prefer to talk: ${link(t, 'book')}. Either way, I wish you and your patients well.\n\nBest,`;
 }
 const SUBJECTS = {
-  1: "Pennsylvania Supreme Court Confirms Physicians May Have a Financial Interest in Workers' Compensation Pharmacy",
+  1: "PA Court Opens Up Significant Revenue Opportunity for Physicians",
   2: "Following up: the 700 Pharmacy decision and your work-comp scripts",
   3: "A cleaner way to handle your work-comp pharmacy",
   4: "Closing the loop",
