@@ -1,0 +1,30 @@
+name: Email auth watchdog
+# Weekly check that SPF/DKIM/DMARC for mdconcierge.net are still published and valid.
+# Emails Eric the moment any of them break or drift.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 13 * * 1'   # Mondays ~9am ET
+
+concurrency:
+  group: dns-watchdog
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Check SPF/DKIM/DMARC
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+        run: node dns-watchdog.mjs
