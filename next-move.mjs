@@ -108,6 +108,40 @@ async function main() {
     queued++;
   }
   console.log(`next-move: considered ${candidates.length}, queued ${queued} recommendation(s).`);
+  await ensureEveryLeadHasAPlan();
+}
+
+// No lead should ever sit with a blank next step. The AI writes the plan for hot leads above;
+// this fills in everyone else deterministically, so a rep opening any record sees what happens
+// next and when, without having to decide or record anything.
+const TERMINAL = ['Won', 'Lost', 'Not Interested', 'Unsubscribed'];
+const PLAN_BY_STAGE = {
+  New:              { step: 'Touch 1: the ruling',            days: 0 },
+  Queued:           { step: 'Touch 1: the ruling',            days: 0 },
+  Contacted:        { step: 'Next cadence touch',             days: 3 },
+  Engaged:          { step: 'Personal follow-up, they clicked', days: 1 },
+  Replied:          { step: 'Answer their reply',             days: 0 },
+  'Materials Sent': { step: 'Check they read the materials',  days: 3 },
+  'Meeting Requested': { step: 'Confirm the meeting time',    days: 0 },
+  'Meeting Booked': { step: 'Pre-call brief and prep',        days: 1 },
+  Met:              { step: 'Send recap and next step',       days: 1 },
+  'Follow-up':      { step: 'Follow up on the open question', days: 2 },
+  Closing:          { step: 'Chase the agreement',            days: 2 },
+  'Not Now':        { step: 'Recycle when the window opens',  days: 90 },
+};
+async function ensureEveryLeadHasAPlan() {
+  const dateIn = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const blanks = await sGet(`mdrx_providers?select=id,funnel_stage,next_step,funnel_next_date,suppressed&suppressed=eq.false&funnel_stage=not.in.(${TERMINAL.map(encodeURIComponent).join(',')})&or=(next_step.is.null,funnel_next_date.is.null)&limit=1000`);
+  let filled = 0;
+  for (const p of blanks || []) {
+    const plan = PLAN_BY_STAGE[p.funnel_stage] || { step: 'Review and decide the next move', days: 1 };
+    await sPatch(`mdrx_providers?id=eq.${p.id}`, {
+      next_step: p.next_step || plan.step,
+      funnel_next_date: p.funnel_next_date || dateIn(plan.days),
+    });
+    filled++;
+  }
+  console.log(`next-move: filled a plan for ${filled} lead(s) that had none.`);
 }
 
 async function alertFailure(job, msg) {
