@@ -90,11 +90,24 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
   // Approved news openers, for A/B-rotating a fresh angle into recycled leads' first touch.
   const openers = await sGet(`mdrx_content_queue?select=id,draft_hook&status=eq.approved&kind=eq.opener&order=id.desc`);
   let openerIdx = 0;
+  // Verified addresses go first. Pattern-derived guesses are what hard-bounce, and a bounce on
+  // a young sending domain costs far more than the delay. Same pool, safer order.
+  const CONF_RANK = (c) => {
+    const s = String(c || '').toLowerCase();
+    if (/spot_verified|seamless_valid|pattern_confirmed/.test(s)) return 0;
+    if (/high_sampled/.test(s)) return 1;
+    if (/acceptall|risky/.test(s)) return 3;
+    if (/pattern_initials|pattern/.test(s)) return 4;
+    return 2;                                   // unknown confidence sits mid-pack
+  };
+  pool.sort((a, b) => (CONF_RANK(a.email_confidence) - CONF_RANK(b.email_confidence))
+    || String(a.funnel_next_date || '').localeCompare(String(b.funnel_next_date || '')));
+
   let queuedCount = 0; const practicesToday = new Set();
   for (const p of pool) {
     if (queuedCount >= cap) break;
