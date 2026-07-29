@@ -1,9 +1,12 @@
-name: Outreach cadence (MANUAL)
-# The traffic-email sequencer. There is NO schedule on purpose: it ONLY runs when
-# you press "Run workflow" below (or ask Claude to trigger it). Even when run, it
-# just does a DRY PREVIEW until outreach_config.sending_enabled = true AND a real
-# mailing address is set. So pressing it now is safe: it shows who it WOULD email.
+name: Outreach cadence
+# The traffic-email sequencer. It QUEUES each lead's due touch into the outbox and
+# SENDS NOTHING; sending still happens from the Cockpit. Runs every weekday morning
+# so follow-ups schedule themselves, and can still be triggered by hand below.
+# Leads who clicked, replied, or booked are excluded automatically, so an engaged
+# physician never receives an automated follow-up.
 on:
+  schedule:
+    - cron: '10 12 * * 1-5'   # weekdays ~8:10am ET
   workflow_dispatch:
     inputs:
       tier:
