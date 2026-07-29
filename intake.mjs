@@ -1427,16 +1427,21 @@ async function scanEricInbox() {
     const since = new Date(Date.now() - 3 * 86400000); // only recent mail, to bound work
     const uids = await client.search({ since }, { uid: true });
     console.log(`[eric@] scanning ${uids?.length || 0} recent message(s) for stray referrals.`);
-    for (const uid of (uids || [])) {
+    // ONE streamed fetch for envelope+source instead of two fetchOne calls per message.
+    // fetchOne on a read-only lock returns undefined under Zoho throttling, which used to
+    // throw on every message and fire a 25-line alert. This matches mdrx-inbox.mjs.
+    if (!uids || !uids.length) { lock.release(); try { await client.logout(); } catch (e) {} return; }
+    for await (const m of client.fetch(uids.join(','), { envelope: true, source: true }, { uid: true })) {
+      const uid = m?.uid;
       try {
-        const env = await client.fetchOne(uid, { envelope: true }, { uid: true });
-        const mid = env.envelope?.messageId || ('eric-uid-' + uid);
+        if (!m || !m.envelope) { console.log(`[eric@] uid ${uid}: no envelope returned, skipping this run.`); continue; }
+        const envelope = m.envelope;
+        const mid = envelope.messageId || ('eric-uid-' + uid);
         if (await seenMessage(mid)) continue;                                   // already handled here or via referrals@
-        const fromAddr = env.envelope?.from?.[0]?.address || '';
-        const subject = env.envelope?.subject || '';
+        const fromAddr = envelope.from?.[0]?.address || '';
+        const subject = envelope.subject || '';
         if (/@mdconcierge\.net$/i.test(fromAddr)) { await recordMessage(mid, null); continue; }  // our own / internal
-        const full = await client.fetchOne(uid, { source: true }, { uid: true });
-        const parsed = await simpleParser(full.source);
+        const parsed = await simpleParser(m.source);
         if (parsed.headers && parsed.headers.get('x-mdc-auto')) { await recordMessage(mid, null); continue; }
         const body = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '');
         let firm = null; try { firm = await firmContext(fromAddr); } catch (e) {}
@@ -1461,7 +1466,7 @@ async function scanEricInbox() {
             if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#08214C', text: '#ffffff' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
             const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
-            await sendReply(fromAddr, subject, replyText, ackHtml, env.envelope?.messageId);  // reply goes FROM referrals@ → migrates them there
+            await sendReply(fromAddr, subject, replyText, ackHtml, envelope.messageId);  // reply goes FROM referrals@ → migrates them there
             await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact);
           } catch (e) { console.error(`  [eric@] ↳ reply failed: ${e.message}`); }
         }
@@ -1504,6 +1509,9 @@ async function main() {
       let fromAddr = '', subject = '', body = '';
       try {
         const msg = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
+        // Zoho can return nothing for a uid under throttling. Leave it unread so the next
+        // run retries it, rather than throwing and alerting on a transient blip.
+        if (!msg || !msg.envelope) { console.log(`[${mailbox}] uid ${uid}: no envelope returned, retrying next run.`); continue; }
         fromAddr = msg.envelope?.from?.[0]?.address || '';
         subject = msg.envelope?.subject || '';
         const parsed = await simpleParser(msg.source);
