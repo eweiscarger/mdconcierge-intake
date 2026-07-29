@@ -16,7 +16,7 @@ const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
 for (const [k, v] of Object.entries({ ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) { console.error('Missing env var: ' + k); process.exit(1); }
 }
-const MAX_ITEMS = Number(process.env.NEWS_MAX_ITEMS || 8);
+const MAX_ITEMS = Number(process.env.NEWS_MAX_ITEMS || 6);
 const today = new Date().toISOString().slice(0, 10);
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -53,14 +53,16 @@ After searching, output ONLY a JSON array (no prose before or after, no markdown
   "headline": "<= 90 char label of the development",
   "angle": "one sentence: why it matters to a physician or to us",
   "draft_hook": "for kind=opener: a 2 to 4 sentence ready email OPENER in the locked voice (hero = doctor + patient, villain = the middleman, our program = the counter; cite 700 Pharmacy / Gosfield where it fits naturally). for kind=opportunity: what it is, why it matters to our target practices, and how MDRx / MDconcierge might participate."
-}`;
+}
+
+Keep each draft_hook under 80 words. Do your searches first, then write the array. Output ONLY the JSON array: no citations, no explanation, no markdown code fences.`;
 
 async function scout() {
   const m = await anthropic.messages.create({
     model: 'claude-sonnet-5',
-    max_tokens: 5000,
+    max_tokens: 12000,
     system: SYSTEM,
-    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }],
+    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }],
     messages: [{ role: 'user', content: USER }],
   });
   const raw = (m.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
