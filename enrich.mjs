@@ -20,43 +20,7 @@ const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SE
 const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
 const sPost = async (t, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
 
-const REGION_PA = /\bpa\b|philad|pennsylvania|lancaster|allentown|harrisburg|pittsburgh|western pa|lehigh|reading|scranton|wynnewood|malvern/i;
-function deriveState(p) { if (p.state) return String(p.state).toUpperCase(); if (REGION_PA.test(p.region || p.city || '')) return 'PA'; return null; }
-function pick(o, keys) { const r = {}; for (const k of keys) if (o[k] != null) r[k] = o[k]; return r; }
-
-// Search NPPES by last name, constrained by state when we can infer it.
-async function npiLookup({ last_name, first_name, state }) {
-  const params = new URLSearchParams({ version: '2.1', last_name, limit: '50' });
-  if (state) params.set('state', state);                 // catches legal-name variants (pro name != registered name)
-  else if (first_name) params.set('first_name', first_name.split(' ')[0]);
-  const r = await fetch(`https://npiregistry.cms.hhs.gov/api/?${params.toString()}`);
-  if (!r.ok) return [];
-  const j = await r.json();
-  return (j.results || []).map((m) => {
-    const b = m.basic || {};
-    const tax = (m.taxonomies || []).find((t) => t.primary) || (m.taxonomies || [])[0] || {};
-    const loc = (m.addresses || []).find((a) => a.address_purpose === 'LOCATION') || (m.addresses || [])[0] || {};
-    return {
-      npi: String(m.number), credentials: (b.credential || '').replace(/\./g, ''),
-      first_name: b.first_name, last_name: b.last_name, specialty: tax.desc || null,
-      address: [loc.address_1, loc.address_2].filter(Boolean).join(' '),
-      city: loc.city || null, state: loc.state || null, zip: (loc.postal_code || '').slice(0, 5) || null,
-      office_phone: loc.telephone_number || null,
-    };
-  });
-}
-
-// Score a candidate. Specialty is the strongest signal when the name is registered differently.
-function score(cand, prov, stateUsed) {
-  let s = 0;
-  const cs = stateUsed || prov.state;
-  if (cs && cand.state) s += (String(cs).toUpperCase() === String(cand.state).toUpperCase()) ? 2 : -2;
-  if (prov.city && cand.city && prov.city.toLowerCase() === cand.city.toLowerCase()) s += 2;
-  const w = (prov.specialty || '').toLowerCase().split(' ')[0];
-  if (w && cand.specialty && cand.specialty.toLowerCase().includes(w)) s += 2;
-  if (prov.first_name && cand.first_name && prov.first_name.toLowerCase().slice(0, 3) === cand.first_name.toLowerCase().slice(0, 3)) s += 1;
-  return s >= 3 ? 'high' : s >= 1 ? 'medium' : 'low';
-}
+import { deriveState, pick, npiLookup, score } from './npi.mjs';
 
 async function main() {
   const thin = await sGet(`mdrx_providers?select=id,first_name,last_name,specialty,city,state,region,practice_name,npi,suppressed&or=(npi.is.null,npi.eq.)&last_name=not.is.null&suppressed=not.eq.true&limit=400`);

@@ -6,6 +6,7 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import { deriveState, pick, npiLookup, score, relocationDelta } from './npi.mjs';
 
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
 const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
@@ -43,7 +44,7 @@ async function main() {
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS }, logger: false });
   await client.connect();
   const lock = await client.getMailboxLock('INBOX', { readOnly: true });
-  const newHard = []; const complaints = [];
+  const newHard = []; const complaints = []; const relocate = [];
   try {
     const total = client.mailbox?.exists || 0;
     const start = Math.max(1, total - 60);
@@ -71,11 +72,55 @@ async function main() {
           suppressed.add(e);
         }
         if (emailToId[e]) await sPatch(`mdrx_providers?id=eq.${emailToId[e]}`, { suppressed: true, funnel_stage: 'Unsubscribed', unsubscribed_at: new Date().toISOString(), funnel_next_date: null });
+        if (type === 'hard' && emailToId[e]) relocate.push(emailToId[e]);   // a hard bounce usually means they moved
         if (type === 'hard') newHard.push(e); else complaints.push(e);
       }
     }
   } finally { lock.release(); }
   await client.logout();
+
+  // A hard bounce usually means the doctor left that practice. Check the NPI registry for
+  // where they are now, constrained to PA. Anything found is QUEUED for Eric to confirm in
+  // enrichment_suggestions; nothing is written onto the lead and nothing is unsuppressed.
+  let relocFound = 0;
+  const relocLines = [];
+  for (const pid of [...new Set(relocate)]) {
+    try {
+      const rows = await sGet(`mdrx_providers?select=id,first_name,last_name,specialty,city,state,region,address,office_phone,practice_name,npi&id=eq.${pid}`);
+      const p = rows && rows[0];
+      if (!p || !p.last_name) continue;
+      const st = deriveState(p) || 'PA';
+      if (st !== 'PA') continue;                       // Eric asked: only chase them if they are in PA
+      const open = await sGet(`enrichment_suggestions?select=id&provider_id=eq.${p.id}&status=eq.pending`);
+      if (open && open.length) continue;               // already waiting on him
+      const cands = await npiLookup({ last_name: p.last_name, first_name: p.first_name, state: st });
+      if (!cands.length) continue;
+      const ranked = cands.map((c) => ({ c, conf: score(c, p, st) }))
+        .sort((a, b) => ({ high: 3, medium: 2, low: 1 }[b.conf] - { high: 3, medium: 2, low: 1 }[a.conf]));
+      const best = ranked[0];
+      if (best.conf === 'low') continue;
+      const c = best.c;
+      const moved = relocationDelta(c, p);
+      const where = [c.city, c.state].filter(Boolean).join(', ');
+      const summary = `${p.first_name || ''} ${p.last_name} bounced at ${p.practice_name || 'the practice on file'}. `
+        + `The NPI registry currently lists NPI ${c.npi}, ${c.specialty || 'specialty n/a'}, ${where}`
+        + `${c.office_phone ? ' · ' + c.office_phone : ''}${c.address ? ' · ' + c.address : ''}. `
+        + (moved ? `That is ${moved.join(', ')} versus what we have, so they likely moved. ` : 'Same location as our record, so the address may just be dead. ')
+        + 'Confirm before we try a new email. No address is guessed here.';
+      await sPost('enrichment_suggestions', {
+        provider_id: p.id, found: { ...pick(c, ['npi', 'credentials', 'specialty', 'address', 'city', 'state', 'zip', 'office_phone']), alternates: ranked.slice(1, 4).map((r) => r.c) },
+        summary, confidence: best.conf, source: 'bounce_relocation', status: 'pending',
+      });
+      relocFound++;
+      relocLines.push(`- Dr. ${p.last_name}: now ${where}${c.office_phone ? ', ' + c.office_phone : ''}${moved ? ' (moved)' : ''}`);
+    } catch (e) { console.error(`relocation check failed for provider ${pid}: ${e.message}`); }
+  }
+  if (relocFound) {
+    await alertEric(`[MDconcierge] ${relocFound} bounced doctor(s) located in PA`,
+      `These addresses hard-bounced. The NPI registry has current information for them:\n\n${relocLines.join('\n')}\n\n`
+      + `They are queued in the Cockpit for you to confirm. Nothing was changed on the lead and no email address was guessed.`);
+  }
+  console.log(`bounce-scan: relocation checks queued ${relocFound}.`);
 
   // Circuit breaker: high hard-bounce rate or any complaint -> auto-pause + alert.
   const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
