@@ -50,8 +50,19 @@ async function ensureFolder(client, name) {
   catch (e) { console.error(`could not create ${name}: ${e.message}`); return false; }
 }
 
+// Several jobs share this mailbox, so Zoho sometimes refuses a new IMAP connection.
+// Back off and retry; if it still will not connect, exit quietly and try again next run.
+// This is housekeeping, so a missed cycle is not worth an alert.
 const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: USER, pass: PASS }, logger: false });
-await client.connect();
+let connected = false;
+for (let attempt = 1; attempt <= 4 && !connected; attempt++) {
+  try { await client.connect(); connected = true; }
+  catch (e) {
+    console.log(`connect attempt ${attempt} failed: ${e.message}`);
+    if (attempt < 4) await new Promise((r) => setTimeout(r, attempt * 20000));
+  }
+}
+if (!connected) { console.log('mailbox busy, skipping this run.'); process.exit(0); }
 
 // ---------- INBOX ----------
 {
