@@ -1,100 +1,83 @@
-// Outreach cadence sequencer (the sales team running itself) - MANUAL TRIGGER ONLY.
-// Advances funnel leads through the touch cadence and sends each touch from eric@.
-// STOPS the instant a lead engages / replies / books (handled elsewhere), checks
-// suppression before every send, recycles Not-Now leads.
-//
-// DOUBLE-GATED so it can never fire by accident:
-//   1) there is NO schedule - it only runs when you press "Run workflow" (or Claude triggers it)
-//   2) it only actually sends when outreach_config.sending_enabled = true AND a real
-//      physical_address is set. Otherwise it does a DRY preview (logs who it would send to).
-//
-// Optional slice inputs (env): SLICE_TIER (A|B|C), SLICE_SPECIALTY, SLICE_LIMIT.
-// Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ERIC_USER, MDRX_ERIC_PASS
-import nodemailer from 'nodemailer';
-import { readFileSync } from 'fs';
+// Outreach queue builder (behavior-aware). Populates mdrx_outbox with the day's
+// due touches for Eric to APPROVE and send (via the send-outreach edge function).
+// It SENDS NOTHING itself. The sequence is behavior-driven, not a dumb timer:
+//   - It only queues leads in Queued/New/Contacted whose next touch is due.
+//   - Leads who replied, engaged, opted out, or booked are Engaged/Replied/
+//     Not Interested/Unsubscribed/Won and are EXCLUDED here (handled by the reply
+//     agent + next-move agent). That is the automatic stop.
+//   - Suppressed and no-email leads are skipped. Warm-up ramp + per-practice pacing.
+// Env: SUPABASE_URL, SUPABASE_SERVICE_KEY.
+const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
+for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) { if (!v) { console.error('Missing env: ' + k); process.exit(1); } }
 
 const SITE = 'https://mdconcierge.net';
-const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
-const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
-const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
-for (const [k, v] of Object.entries({ ERIC_PASS, SUPABASE_URL, SUPABASE_SERVICE_KEY })) { if (!v) { console.error('Missing env: ' + k); process.exit(1); } }
-
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
 const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
+const sPost = async (t, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
 const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`patch ${p} ${r.status}: ${await r.text()}`); };
 const today = () => new Date().toISOString().slice(0, 10);
 const addDaysISO = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
-const addMonthsISO = (m) => { const d = new Date(); d.setMonth(d.getMonth() + m); return d.toISOString().slice(0, 10); };
 
-const SUBJECTS = [
-  "injured workers getting their meds, and the practice's side of it",
-  "the 700 Pharmacy decision, in one page",
-  "a cleaner way to handle your work-comp scripts",
-];
-const links = (t) => ({ overview: `${SITE}/go.html?p=${t}&to=brief`, book: `${SITE}/book.html?p=${t}`, unsub: `${SITE}/unsubscribe.html?p=${t}` });
-const footer = (cfg, t) => { const l = links(t); return `\n\n${cfg.from_name}\n${cfg.physical_address}\nUnsubscribe: ${l.unsub}`; };
-
-// Touch 1 = the approved designed email (HTML template + plain-text fallback).
-const TOUCH1_HTML = readFileSync(new URL('./email-templates/touch1.html', import.meta.url), 'utf8');
-const TOUCH1_SUBJECT = "Pennsylvania Supreme Court Confirms Physicians May Have a Financial Interest in Workers' Compensation Pharmacy";
-const mergeTouch1 = (p, cfg) => TOUCH1_HTML
-  .replace(/\{\{last\}\}/g, p.last_name || '')
-  .replace(/\{\{token\}\}/g, p.funnel_token || '')
-  .replace(/\{\{address\}\}/g, cfg.physical_address || '');
-function touch1Text(p, cfg) {
-  const t = p.funnel_token;
-  return `Dr. ${p.last_name || ''},\n\nIf you treat workers' compensation patients, a recent Pennsylvania Supreme Court decision has significantly expanded physicians' ability to participate financially in workers' compensation pharmacy.\n\nOn June 16, 2026, in 700 Pharmacy v. Bureau of Workers' Compensation Fee Review, the Court confirmed that physicians may have a financial interest in a workers' compensation pharmacy and that insurers cannot deny payment for covered prescriptions on that basis.\n\nHistorically, workers' compensation prescriptions have generated pharmacy revenue for parties throughout the workers' compensation system, but not for the physicians who prescribed them.\n\nOur Workers' Compensation Pharmacy Platform changes that by allowing physicians to participate in that pharmacy revenue without the complexity of owning, operating, staffing, or purchasing a pharmacy.\n\nWhat this means for you:\n- Improve medication adherence with medications shipped directly to injured workers, at no cost while their claim remains open.\n- Generate ancillary pharmacy revenue from the workers' compensation prescriptions you're already writing.\n- Continue prescribing exactly as you do today. No workflow changes or additional administrative burden for you or your staff.\n\nIf you would like to review the legal foundation before we speak, I have included several resources below:\n- Pennsylvania Supreme Court decision: ${SITE}/go.html?p=${t}&to=decision\n- Daniel Siegel's practical analysis for Pennsylvania physicians: ${SITE}/go.html?p=${t}&to=siegel\n- Alice Gosfield's legal analysis: ${SITE}/go.html?p=${t}&to=gosfield\n- Overview of our Workers' Compensation Pharmacy Platform: ${SITE}/go.html?p=${t}&to=program\n\nIf you treat workers' compensation patients and would like to explore whether participating in a pharmacy is right for you, I would be happy to answer your compliance questions and explain how the model works.\n\nSchedule a 15 minute call: ${SITE}/go.html?p=${t}&to=book\nOr simply reply to this email with any questions.\n\nBest,\nEric Weiscarger\nMDconcierge\n\nMDconcierge\n${cfg.physical_address}\nUnsubscribe: ${SITE}/unsubscribe.html?p=${t}`;
-}
-function body(touch, p, cfg) {
-  const l = links(p.funnel_token); const first = p.first_name || 'there';
-  if (touch === 1) return touch1Text(p, cfg);
+// Clean, personal plain-text touches. No address, no unsubscribe. End at "Best,"
+// (the signature is attached at send time by the send-outreach function).
+const link = (t, to) => `${SITE}/go.html?p=${t}&to=${to}`;
+function touchBody(touch, p) {
   const dr = `Dr. ${p.last_name || ''}`.trim();
-  if (touch === 2) return `${dr}, following up on my note about the Pennsylvania Supreme Court's 700 Pharmacy decision and what it means for practices that treat injured workers. No agenda. I think it is directly relevant to the work-comp prescriptions your practice already writes. The decision and a short overview of our program are here whenever you have a minute: ${l.overview}` + footer(cfg, p.funnel_token);
-  if (touch === 3) return `${dr}, I will keep this short. If it is ever useful, the decision and our program overview answer most of the questions on their own: ${l.overview}. And if you would rather talk it through, my calendar is open: ${l.book}` + footer(cfg, p.funnel_token);
-  return `${dr}, I will close the loop here so I am not crowding your inbox. If the timing is not right, no problem at all. If it is ever worth a look, the decision and program details are here: ${l.overview}, and my calendar is open if you would prefer to talk: ${l.book}. Either way, I wish you and your patients well.` + footer(cfg, p.funnel_token);
+  const t = p.funnel_token || '';
+  if (touch === 1) {
+    return `${dr},\n\nIf you treat workers' compensation patients, a recent Pennsylvania Supreme Court decision has significantly expanded physicians' ability to participate financially in workers' compensation pharmacy.\n\nOn June 16, 2026, in 700 Pharmacy v. Bureau of Workers' Compensation Fee Review, the Court confirmed that physicians may have a financial interest in a workers' compensation pharmacy, and that insurers cannot deny payment for covered prescriptions on that basis.\n\nOur Workers' Compensation Pharmacy Platform lets physicians share in that pharmacy revenue without owning, operating, staffing, or purchasing a pharmacy, and without changing how you prescribe.\n\nWhat it means for you:\n- Medications shipped directly to injured workers at no cost to them while the claim is open, which helps adherence.\n- Ancillary pharmacy revenue from the work-comp prescriptions you already write.\n- No workflow or administrative change for you or your staff.\n\nA few resources if you want to review the legal foundation first:\n- Pennsylvania Supreme Court decision: ${link(t, 'decision')}\n- Daniel Siegel's analysis for PA physicians: ${link(t, 'siegel')}\n- Overview of the platform: ${link(t, 'program')}\n\nIf you would like to explore whether participating is right for your practice, I am happy to answer your compliance questions and walk you through the model. Grab 15 minutes here: ${link(t, 'book')}, or just reply with any questions.\n\nBest,`;
+  }
+  if (touch === 2) return `${dr},\n\nFollowing up on my note about the Pennsylvania Supreme Court's 700 Pharmacy decision and what it means for practices that treat injured workers. I think it is directly relevant to the work-comp scripts your practice already writes. The decision and a short overview are here whenever you have a minute: ${link(t, 'program')}\n\nBest,`;
+  if (touch === 3) return `${dr},\n\nKeeping this short. If it is useful, the decision and our program overview answer most questions on their own: ${link(t, 'program')}. And if you would rather talk it through, my calendar is open: ${link(t, 'book')}\n\nBest,`;
+  return `${dr},\n\nI will close the loop here so I am not crowding your inbox. If the timing is not right, no problem at all. If it is ever worth a look, the decision and program details are here: ${link(t, 'program')}, and my calendar is open if you would prefer to talk: ${link(t, 'book')}. Either way, I wish you and your patients well.\n\nBest,`;
 }
+const SUBJECTS = {
+  1: "Pennsylvania Supreme Court Confirms Physicians May Have a Financial Interest in Workers' Compensation Pharmacy",
+  2: "Following up: the 700 Pharmacy decision and your work-comp scripts",
+  3: "A cleaner way to handle your work-comp pharmacy",
+  4: "Closing the loop",
+};
 
 async function run() {
-  const cfg = (await sGet('outreach_config?id=eq.1'))[0];
-  if (!cfg) { console.log('no outreach_config'); return; }
-  const addrOk = cfg.physical_address && !/SET PHYSICAL ADDRESS/i.test(cfg.physical_address);
-  const DRY = !cfg.sending_enabled || !addrOk;
-  const cad = cfg.cadence || { t1_day: 1, t2_day: 4, t3_day: 9, breakup_day: 16, recycle_months: 3 };
-  console.log(`cadence ${today()} | mode=${DRY ? 'DRY PREVIEW (no send)' : 'LIVE'} | cap=${cfg.daily_send_cap}${addrOk ? '' : ' | reason: no real address'}${cfg.sending_enabled ? '' : ' | reason: sending_enabled off'}`);
+  const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
+  // Warm-up ramp: clock starts the first time we queue. cap grows over the first week.
+  let warmStart = cfg.warmup_started_at;
+  if (!warmStart) { warmStart = today(); await sPatch('outreach_config?id=eq.1', { warmup_started_at: warmStart }); }
+  const daysIn = Math.floor((Date.now() - new Date(warmStart).getTime()) / 86400000);
+  const rampCap = daysIn < 3 ? 10 : daysIn < 7 ? 15 : 20;
+  const cap = Math.min(Number(cfg.daily_send_cap) || 20, rampCap);
 
-  // Recycle Not-Now leads whose recycle_date arrived.
+  // Recycle Not-Now leads whose recycle date arrived.
   const rec = await sGet(`mdrx_providers?select=id&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
   for (const r of rec) await sPatch(`mdrx_providers?id=eq.${r.id}`, { funnel_stage: 'Queued', touch_count: 0, next_step: 'Touch 1', funnel_next_date: today(), recycle_date: null });
-  if (rec.length) console.log(`recycled ${rec.length} Not-Now -> Queued`);
 
-  // Optional slice filters for the manual trigger.
-  let q = `mdrx_providers?select=id,first_name,last_name,practice_name,personalized_opener,funnel_token,email,touch_count&lead_type=eq.funnel&funnel_stage=in.(Queued,Contacted)&funnel_next_date=lte.${today()}&email=not.is.null&suppressed=eq.false&order=funnel_next_date.asc`;
-  if (process.env.SLICE_TIER) q += `&intent_tier=eq.${encodeURIComponent(process.env.SLICE_TIER)}`;
-  if (process.env.SLICE_SPECIALTY) q += `&target_specialty=eq.${encodeURIComponent(process.env.SLICE_SPECIALTY)}`;
-  const cap = Number(process.env.SLICE_LIMIT) || cfg.daily_send_cap || 40;
-  q += `&limit=${cap}`;
-  const leads = await sGet(q);
-  console.log(`${leads.length} lead(s) due (cap ${cap})`);
+  // Already-queued leads (avoid duplicates).
+  const openBox = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
+  const queued = new Set((openBox || []).map((x) => x.provider_id));
+  const supp = await sGet('suppressions?select=email');
+  const suppressed = new Set((supp || []).map((s) => (s.email || '').toLowerCase()));
 
-  const transport = DRY ? null : nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
-  let sent = 0, skipped = 0;
-  for (const p of leads) {
-    const sup = await sGet(`suppressions?select=email&email=ilike.${encodeURIComponent(p.email)}`);
-    if (sup.length) { skipped++; continue; }
+  // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
+  // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&funnel_next_date=lte.${today()}&email=not.is.null&suppressed=eq.false&order=funnel_next_date.asc&limit=400`);
+
+  let queuedCount = 0; const practicesToday = new Set();
+  for (const p of pool) {
+    if (queuedCount >= cap) break;
+    if (queued.has(p.id)) continue;
+    if (suppressed.has((p.email || '').toLowerCase())) continue;
+    const prac = (p.practice_name || '').toLowerCase();
+    if (prac && practicesToday.has(prac)) continue; // pace by practice: max one per office per run
     const touch = (p.touch_count || 0) + 1;
-    if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addMonthsISO(cad.recycle_months || 3), funnel_next_date: null }); continue; }
-    const subject = touch === 1 ? TOUCH1_SUBJECT : SUBJECTS[(touch - 2) % SUBJECTS.length];
-    const text = body(touch, p, cfg);
-    const html = touch === 1 ? mergeTouch1(p, cfg) : undefined;
-    if (DRY) { console.log(`[dry] touch ${touch} -> ${p.email} (${p.first_name} ${p.last_name})`); sent++; continue; }
-    try { await transport.sendMail({ from: `"${cfg.from_name}" <${ERIC_USER}>`, to: p.email, subject, text, html }); }
-    catch (e) { console.error(`send failed ${p.email}: ${e.message}`); skipped++; continue; }
-    const nextDate = touch === 1 ? addDaysISO(cad.t2_day - cad.t1_day) : touch === 2 ? addDaysISO(cad.t3_day - cad.t2_day) : touch === 3 ? addDaysISO(cad.breakup_day - cad.t3_day) : null;
-    const patch = { touch_count: touch, last_touch_at: new Date().toISOString(), funnel_stage: 'Contacted', next_step: `Touch ${touch + 1}`, funnel_next_date: nextDate };
-    if (touch === 4) { patch.funnel_stage = 'Not Now'; patch.next_step = 'Recycle'; patch.recycle_date = addMonthsISO(cad.recycle_months || 3); patch.funnel_next_date = patch.recycle_date; }
-    await sPatch(`mdrx_providers?id=eq.${p.id}`, patch);
-    sent++;
+    if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
+    await sPost('mdrx_outbox', {
+      provider_id: p.id, touch_no: touch, to_email: p.email,
+      subject: SUBJECTS[touch] || SUBJECTS[4], body_text: touchBody(touch, p), body_html: null,
+      status: 'pending', scheduled_date: today(),
+    });
+    if (prac) practicesToday.add(prac);
+    queued.add(p.id); queuedCount++;
   }
-  console.log(`done. ${DRY ? 'would-send' : 'SENT'}=${sent} skipped=${skipped}`);
+  console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} touch(es) for approval. Recycled ${rec.length}.`);
 }
-run().catch(e => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
+run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
