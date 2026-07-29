@@ -1,0 +1,113 @@
+// next-move.mjs — smart hot-lead cadence agent.
+// For each active Pipeline lead that is due (or newly engaged) and has no pending
+// recommendation, it reads the lead's real behavior (opens, clicks, tool views,
+// replies, last touch, stage) and asks Claude to decide the single best NEXT MOVE:
+// the channel, the angle, the DATE to do it, and a drafted message. It queues that
+// in mdrx_next_moves for Eric to approve. It SENDS NOTHING (auto-send is gated on the
+// deliverability unlock). Runs on a schedule via GitHub Actions.
+import Anthropic from '@anthropic-ai/sdk';
+import nodemailer from 'nodemailer';
+
+const { ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
+const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
+const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
+for (const [k, v] of Object.entries({ ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
+  if (!v) { console.error('Missing env var: ' + k); process.exit(1); }
+}
+const PER_RUN = Number(process.env.NEXTMOVE_PER_RUN || 10);
+const today = new Date().toISOString().slice(0, 10);
+
+const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
+const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
+const sPost = async (t, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
+const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`patch ${p} ${r.status}: ${await r.text()}`); };
+
+const SYSTEM = `You are the follow-up strategist for Eric Weiscarger's MDRx Workers' Compensation Pharmacy Program. Eric partners with the MDRx360 team to bring physicians into a pharmacy dispensing program. You decide the SINGLE best next move for one lead based on their actual behavior, so Eric never has to think about follow-up timing or wording.
+
+Given the lead's behavior, return STRICT JSON only:
+{"recommended_date":"YYYY-MM-DD","channel":"email|call|text","angle":"short label of the approach","reason":"one line: why this move, why now, from their behavior","draft":"the message to send (for email/text) or 2-3 call talking points (for call)"}
+
+Timing logic (today is ${today}):
+- Just engaged / opened the tool / clicked in the last day or two: move fast, 1-2 days out.
+- Opened but went quiet: 3-5 days out, gentle nudge or a new angle.
+- Booked a meeting: pre-call nurture a day or two before.
+- Cold for a while: longer gap and a genuinely different angle, do not repeat the last touch.
+Pick a real date on or after ${today}.
+
+Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes (use commas or periods). Never mention commission or tie economics to prescribing. Never invent facts, numbers, names, or legal conclusions. Name it in full: "MDRx Workers' Compensation Pharmacy Program". For emails, sign "Best," then a new line "Eric". Keep it short.`;
+
+async function decide(ctx) {
+  try {
+    const m = await anthropic.messages.create({
+      model: 'claude-sonnet-5', max_tokens: 700, system: SYSTEM,
+      messages: [{ role: 'user', content: 'Plan the next move for this lead:\n\n' + JSON.stringify(ctx) }],
+    });
+    const raw = (m.content?.[0]?.text || '').trim();
+    const o = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+    if (!o.draft || !o.recommended_date) return null;
+    if (o.recommended_date < today) o.recommended_date = today;
+    return o;
+  } catch (e) { console.error('decide failed: ' + e.message); return null; }
+}
+
+async function main() {
+  // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
+  const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
+  const pending = new Set((openMoves || []).map((x) => x.provider_id));
+
+  // Prioritize: due today/overdue, or flagged for attention, or no next date set. Hottest first.
+  const candidates = (P || [])
+    .filter((p) => !pending.has(p.id))
+    .filter((p) => !p.funnel_next_date || p.funnel_next_date <= today || p.behavior_flag)
+    .sort((a, b) => (Number(b.funnel_score) || 0) - (Number(a.funnel_score) || 0))
+    .slice(0, PER_RUN);
+
+  let queued = 0;
+  for (const p of candidates) {
+    const [events, replies, quotes, acts] = await Promise.all([
+      sGet(`mdrx_funnel_events?select=event,page,link,cta,scroll,seconds,created_at&provider_id=eq.${p.id}&order=created_at.desc&limit=15`),
+      sGet(`mdrx_inbox_drafts?select=subject,snippet,sentiment,received_at&provider_id=eq.${p.id}&order=received_at.desc&limit=5`),
+      sGet(`quote_links?select=view_count,first_viewed_at,last_viewed_at&provider_id=eq.${p.id}`),
+      sGet(`mdrx_activity?select=type,subject,notes,occurred_at&provider_id=eq.${p.id}&order=occurred_at.desc&limit=5`),
+    ]);
+    const ctx = {
+      name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), practice: p.practice_name, specialty: p.specialty,
+      stage: p.funnel_stage, score: p.funnel_score, tier: p.intent_tier, behavior_flag: p.behavior_flag,
+      last_cta: p.funnel_last_cta, opens: p.funnel_open_count, clicked: p.funnel_clicked, booked: p.funnel_booked,
+      touches_so_far: p.touch_count, last_touch_at: p.last_touch_at, current_next_step: p.next_step,
+      engaged_at: p.engaged_at, has_email: !!p.email,
+      engagement_events: (events || []).map((e) => ({ event: e.event, page: e.page, link: e.link, cta: e.cta, when: e.created_at })),
+      their_replies: (replies || []).map((r) => ({ said: r.snippet, sentiment: r.sentiment, when: r.received_at })),
+      tool_views: (quotes || []).map((q) => ({ views: q.view_count, first: q.first_viewed_at, last: q.last_viewed_at })),
+      logged_touches: acts || [],
+    };
+    const mv = await decide(ctx);
+    if (!mv) continue;
+    await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending' });
+    // reflect the recommendation on the record so nothing sits with no plan
+    await sPatch(`mdrx_providers?id=eq.${p.id}`, { next_step: mv.angle || p.next_step, funnel_next_date: mv.recommended_date });
+    queued++;
+  }
+  console.log(`next-move: considered ${candidates.length}, queued ${queued} recommendation(s).`);
+}
+
+async function alertFailure(job, msg) {
+  try {
+    const rows = await sGet(`job_alerts?select=last_alert_at&job=eq.${job}`);
+    const last = rows[0]?.last_alert_at ? new Date(rows[0].last_alert_at).getTime() : 0;
+    if (Date.now() - last < 3 * 3600 * 1000) return;
+    const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+    await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: `[MDconcierge] the ${job} job hit a problem`, text: msg });
+    await fetch(`${SUPABASE_URL}/rest/v1/job_alerts`, { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ job, last_alert_at: new Date().toISOString(), last_msg: msg.slice(0, 300) }) });
+  } catch (e) { console.error('alertFailure error: ' + e.message); }
+}
+
+main().catch(async (e) => {
+  const msg = String(e?.message || e);
+  if (/timeout|econnreset|econnrefused|enotfound|socket|network|fetch failed|overloaded|529|503/i.test(msg)) { console.warn('transient, skipping run: ' + msg); process.exit(0); }
+  console.error('next-move fatal: ' + (e?.stack || e));
+  await alertFailure('next-move', msg);
+  process.exit(0);
+});
