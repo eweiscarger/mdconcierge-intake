@@ -44,7 +44,7 @@ const mergeTouch = (touch, p, hook) => {
 };
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
 const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
-const sPost = async (t, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
+const sPost = async (t, row, prefer = 'return=minimal') => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: prefer }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
 const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`patch ${p} ${r.status}: ${await r.text()}`); };
 const today = () => new Date().toISOString().slice(0, 10);
 const addDaysISO = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
@@ -77,6 +77,17 @@ async function run() {
   if (!cfg.warmup_started_at) await sPatch('outreach_config?id=eq.1', { warmup_started_at: today() });
   // Batch size: explicit BATCH_SIZE override (manual first batch), else the daily cap. Eric self-throttles by approving fewer.
   const cap = Number(process.env.BATCH_SIZE) || Number(cfg.daily_send_cap) || 20;
+
+  // Publish the touch templates so the CRM compose box can offer them as a dropdown.
+  // The cadence stays the single source of truth; this is a one-way mirror with the merge
+  // tokens left in, so the CRM can substitute the doctor it is actually looking at.
+  const TOUCH_LABELS = { 1: 'Touch 1 · the ruling', 2: 'Touch 2 · how the model works', 3: 'Touch 3 · where the ruling stops', 4: 'Touch 4 · closing the loop' };
+  for (const n of [1, 2, 3, 4]) {
+    const stub = { last_name: '{{last}}', funnel_token: '{{token}}' };
+    await sPost('mdrx_templates',
+      { touch_no: n, label: TOUCH_LABELS[n], subject: SUBJECTS[n] || '', body_text: touchBody(n, stub), updated_at: new Date().toISOString() },
+      'resolution=merge-duplicates,return=minimal');
+  }
 
   // Recycle Not-Now leads whose recycle date arrived.
   const rec = await sGet(`mdrx_providers?select=id,recycle_round&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
