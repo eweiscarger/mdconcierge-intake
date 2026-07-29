@@ -42,7 +42,5 @@ jobs:
           MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          SLICE_TIER: ${{ github.event.inputs.tier }}
-          SLICE_SPECIALTY: ${{ github.event.inputs.specialty }}
-          SLICE_LIMIT: ${{ github.event.inputs.limit }}
+          BATCH_SIZE: ${{ github.event.inputs.limit }}
         run: node cadence.mjs

@@ -40,12 +40,9 @@ const SUBJECTS = {
 
 async function run() {
   const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
-  // Warm-up ramp: clock starts the first time we queue. cap grows over the first week.
-  let warmStart = cfg.warmup_started_at;
-  if (!warmStart) { warmStart = today(); await sPatch('outreach_config?id=eq.1', { warmup_started_at: warmStart }); }
-  const daysIn = Math.floor((Date.now() - new Date(warmStart).getTime()) / 86400000);
-  const rampCap = daysIn < 3 ? 10 : daysIn < 7 ? 15 : 20;
-  const cap = Math.min(Number(cfg.daily_send_cap) || 20, rampCap);
+  if (!cfg.warmup_started_at) await sPatch('outreach_config?id=eq.1', { warmup_started_at: today() });
+  // Batch size: explicit BATCH_SIZE override (manual first batch), else the daily cap. Eric self-throttles by approving fewer.
+  const cap = Number(process.env.BATCH_SIZE) || Number(cfg.daily_send_cap) || 20;
 
   // Recycle Not-Now leads whose recycle date arrived.
   const rec = await sGet(`mdrx_providers?select=id&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
@@ -59,7 +56,7 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&funnel_next_date=lte.${today()}&email=not.is.null&suppressed=eq.false&order=funnel_next_date.asc&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
   let queuedCount = 0; const practicesToday = new Set();
   for (const p of pool) {
