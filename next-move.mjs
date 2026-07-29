@@ -35,6 +35,8 @@ Timing logic (today is ${today}):
 - Cold for a while: longer gap and a genuinely different angle, do not repeat the last touch.
 Pick a real date on or after ${today}.
 
+ADDRESSING: The lead is a physician. ALWAYS address them as "Dr. [last name]" in the greeting (e.g., "Hi Dr. Rao,"), NEVER by first name. Only office staff, practice managers, and champions are addressed by first name, and those are not the lead here.
+
 Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes (use commas or periods). Never mention commission or tie economics to prescribing. Never invent facts, numbers, names, or legal conclusions. Name it in full: "MDRx Workers' Compensation Pharmacy Program". For emails, sign "Best," then a new line "Eric". Keep it short.`;
 
 async function decide(ctx) {
@@ -75,7 +77,7 @@ async function main() {
       sGet(`mdrx_activity?select=type,subject,notes,occurred_at&provider_id=eq.${p.id}&order=occurred_at.desc&limit=5`),
     ]);
     const ctx = {
-      name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), practice: p.practice_name, specialty: p.specialty,
+      name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), last_name: p.last_name, address_as: `Dr. ${p.last_name || ''}`.trim(), practice: p.practice_name, specialty: p.specialty,
       stage: p.funnel_stage, score: p.funnel_score, tier: p.intent_tier, behavior_flag: p.behavior_flag,
       last_cta: p.funnel_last_cta, opens: p.funnel_open_count, clicked: p.funnel_clicked, booked: p.funnel_booked,
       touches_so_far: p.touch_count, last_touch_at: p.last_touch_at, current_next_step: p.next_step,
