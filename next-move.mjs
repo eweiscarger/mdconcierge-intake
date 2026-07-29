@@ -44,7 +44,7 @@ Best,
 Eric Weiscarger
 Founder, MDconcierge
 Referral Management • Work Comp Pharmacy • Ancillary Coordination
-(570) 817-7569 • referrals@mdconcierge.net • mdconcierge.net`;
+(570) 817-7569 • eric@mdconcierge.net • mdconcierge.net`;
 
 async function decide(ctx) {
   try {

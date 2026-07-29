@@ -65,7 +65,7 @@ Best,
 Eric Weiscarger
 Founder, MDconcierge
 Referral Management • Work Comp Pharmacy • Ancillary Coordination
-(570) 817-7569 • referrals@mdconcierge.net • mdconcierge.net
+(570) 817-7569 • eric@mdconcierge.net • mdconcierge.net
 
 Return ONLY: {"sentiment":"...","hot":true|false,"draft":"..."}`;
   const user = `This email is from ${who} <${fromAddr}>${isTeam ? ' (an MDRx360 TEAMMATE, not a prospect)' : ''}. Subject: "${subject}".\n\nFull thread (most recent on top):\n"""\n${String(body || '').slice(0, 4500)}\n"""`;
