@@ -136,6 +136,7 @@ async function run() {
     if (prac) practicesToday.add(prac);
     queued.add(p.id); queuedCount++;
   }
+  const daysIn = cfg.warmup_started_at ? Math.floor((Date.now() - new Date(cfg.warmup_started_at).getTime()) / 86400000) + 1 : 1;
   console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} touch(es) for approval. Recycled ${rec.length}.`);
 }
 run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
