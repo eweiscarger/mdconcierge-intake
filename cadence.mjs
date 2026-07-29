@@ -21,26 +21,14 @@ const addDaysISO = (n) => new Date(Date.now() + n * 86400000).toISOString().slic
 // Clean, personal plain-text touches. No address, no unsubscribe. End at "Best,"
 // (the signature is attached at send time by the send-outreach function).
 const link = (t, to) => `${SITE}/go.html?p=${t}&to=${to}`;
-// Eric's standing rule (2026-07-29): no unsubscribe block and no mailing address on these
-// (low-volume 1:1 sales, not bulk marketing). A soft opt-out line carries that job instead,
-// and the reply agent auto-handles anyone who takes it up.
-const OPTOUT = `If you don't see workers' compensation patients and would prefer I not reach out again, just let me know.`;
-
 function touchBody(touch, p) {
   const dr = `Dr. ${p.last_name || ''}`.trim();
   const t = p.funnel_token || '';
-  // Specialty-level relevance line from the list. It proves we know their caseload;
-  // it is deliberately NOT fake research about the individual doctor.
-  const opener = (p.personalized_opener || '').trim();
   if (touch === 1) {
-    // With an opener, the "If you treat work comp" conditional is redundant, so drop it.
-    const hook = opener
-      ? `${opener}\n\nA recent Pennsylvania Supreme Court decision has significantly expanded physicians' ability to participate financially in workers' compensation pharmacy.`
-      : `If you treat workers' compensation patients, a recent Pennsylvania Supreme Court decision has significantly expanded physicians' ability to participate financially in workers' compensation pharmacy.`;
-    return `${dr},\n\n${hook}\n\nOn June 16, 2026, in 700 Pharmacy v. Bureau of Workers' Compensation Fee Review, the Court confirmed that physicians may have a financial interest in a workers' compensation pharmacy, and that insurers cannot deny payment for covered prescriptions on that basis.\n\nOur Workers' Compensation Pharmacy Platform lets physicians share in that pharmacy revenue without owning, operating, staffing, or purchasing a pharmacy, and without changing how you prescribe.\n\nWhat it means for you:\n- Medications shipped directly to injured workers at no cost to them while the claim is open, which helps adherence.\n- Ancillary pharmacy revenue from the work-comp prescriptions you already write.\n- No workflow or administrative change for you or your staff.\n\nA few resources if you want to review the legal foundation first:\n- Pennsylvania Supreme Court decision: ${link(t, 'decision')}\n- Daniel Siegel's analysis for PA physicians: ${link(t, 'siegel')}\n- Overview of the platform: ${link(t, 'program')}\n\nIf it is useful, I can walk you through the decision, the compliance questions, and how the model works, with no obligation to do anything with it. Start here: ${link(t, 'brief')}. If you would rather just talk it through, my calendar is open: ${link(t, 'book')}, or simply reply with any questions.\n\n${OPTOUT}\n\nBest,`;
+    return `${dr},\n\nIf you treat workers' compensation patients, a recent Pennsylvania Supreme Court decision has significantly expanded physicians' ability to participate financially in workers' compensation pharmacy.\n\nOn June 16, 2026, in 700 Pharmacy v. Bureau of Workers' Compensation Fee Review, the Court confirmed that physicians may have a financial interest in a workers' compensation pharmacy, and that insurers cannot deny payment for covered prescriptions on that basis.\n\nOur Workers' Compensation Pharmacy Platform lets physicians share in that pharmacy revenue without owning, operating, staffing, or purchasing a pharmacy, and without changing how you prescribe.\n\nWhat it means for you:\n- Medications shipped directly to injured workers at no cost to them while the claim is open, which helps adherence.\n- Ancillary pharmacy revenue from the work-comp prescriptions you already write.\n- No workflow or administrative change for you or your staff.\n\nA few resources if you want to review the legal foundation first:\n- Pennsylvania Supreme Court decision: ${link(t, 'decision')}\n- Daniel Siegel's analysis for PA physicians: ${link(t, 'siegel')}\n- Overview of the platform: ${link(t, 'program')}\n\nIf you would like to explore whether participating is right for your practice, I am happy to answer your compliance questions and walk you through the model. Grab 15 minutes here: ${link(t, 'book')}, or just reply with any questions.\n\nBest,`;
   }
-  if (touch === 2) return `${dr},\n\nFollowing up on my note about the Pennsylvania Supreme Court's 700 Pharmacy decision and what it means for practices that treat injured workers. I think it is directly relevant to the work-comp scripts your practice already writes. The decision and a short overview are here whenever you have a minute: ${link(t, 'program')}\n\n${OPTOUT}\n\nBest,`;
-  if (touch === 3) return `${dr},\n\nKeeping this short. If it is useful, the decision and our program overview answer most questions on their own: ${link(t, 'program')}. And if you would rather talk it through, my calendar is open: ${link(t, 'book')}\n\n${OPTOUT}\n\nBest,`;
+  if (touch === 2) return `${dr},\n\nFollowing up on my note about the Pennsylvania Supreme Court's 700 Pharmacy decision and what it means for practices that treat injured workers. I think it is directly relevant to the work-comp scripts your practice already writes. The decision and a short overview are here whenever you have a minute: ${link(t, 'program')}\n\nBest,`;
+  if (touch === 3) return `${dr},\n\nKeeping this short. If it is useful, the decision and our program overview answer most questions on their own: ${link(t, 'program')}. And if you would rather talk it through, my calendar is open: ${link(t, 'book')}\n\nBest,`;
   return `${dr},\n\nI will close the loop here so I am not crowding your inbox. If the timing is not right, no problem at all. If it is ever worth a look, the decision and program details are here: ${link(t, 'program')}, and my calendar is open if you would prefer to talk: ${link(t, 'book')}. Either way, I wish you and your patients well.\n\nBest,`;
 }
 const SUBJECTS = {
@@ -68,7 +56,7 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
   // Approved news openers, for A/B-rotating a fresh angle into recycled leads' first touch.
   const openers = await sGet(`mdrx_content_queue?select=id,draft_hook&status=eq.approved&kind=eq.opener&order=id.desc`);
@@ -103,7 +91,4 @@ async function run() {
   }
   console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} touch(es) for approval. Recycled ${rec.length}.`);
 }
-// CADENCE_IMPORT_ONLY=1 lets tooling import touchBody/SUBJECTS (e.g. to re-render already
-// queued drafts after a copy change) without running the queue builder.
-if (process.env.CADENCE_IMPORT_ONLY !== '1') run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
-export { touchBody, SUBJECTS };
+run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
