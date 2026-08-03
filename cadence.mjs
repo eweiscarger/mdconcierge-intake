@@ -25,6 +25,28 @@ const TOUCH_HTML = {
 // Eric's signature lives INSIDE the card, not appended after it. send-outreach sees the
 // <!--signature-inline--> marker and skips its own append so it never doubles up.
 const SIGNATURE_HTML = readFileSync(new URL('./email-templates/signature.html', import.meta.url), 'utf8');
+// Engaged follow-ups use the same card, header and signature block as the cold touches, so every
+// email that leaves here looks like the same company wrote it.
+const ENGAGED_HTML = readFileSync(new URL('./email-templates/engaged.html', import.meta.url), 'utf8');
+const P = 'style="font-size:14px;line-height:1.6;color:#33404f;margin:0 0 14px;"';
+// Turn the plain-text body into the card's paragraph markup, keeping links clickable.
+function engagedHtmlBody(text){
+  const NL = String.fromCharCode(10);
+  const paras = String(text || '').trim().split(NL + NL);
+  return paras.map(function(par){
+    const withLinks = esc(par.trim())
+      .replace(new RegExp('(https?://\\S+)', 'g'), '<a href="$1" style="color:#2F5EA8;">$1</a>')
+      .split(NL).join('<br>');
+    return '<p ' + P + '>' + withLinks + '</p>';
+  }).join(NL + '        ');
+}
+function mergeEngaged(n, p){
+  return ENGAGED_HTML
+    .split('{{body}}').join(engagedHtmlBody(engagedBody(n, p)))
+    .split('{{signature}}').join(SIGNATURE_HTML)
+    .split('{{last}}').join(p.last_name || '')
+    .split('{{token}}').join(p.funnel_token || '');
+}
 // No per-lead opener line. A generic specialty statement reads as filler to a physician
 // who already knows it, so Touch 1 opens on the news itself.
 const esc = (s) => String(s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -56,6 +78,13 @@ const addDaysISO = (n) => new Date(Date.now() + n * 86400000).toISOString().slic
 const link = (t, to) => `${SITE}/go.html?p=${t}&to=${to}`;
 // Soft opt-out. Same suppression plumbing as any opt-out link, worded as a personal
 // offer to stop rather than a marketing footer.
+// Plain-text signature. The designed HTML carries the full block; the text alternative used to
+// end on a bare "Eric", which gave a doctor replying from a phone no way to reach him.
+const TEXT_SIG = `Eric Weiscarger
+Founder, MDconcierge
+(570) 817-7569
+eric@mdconcierge.net
+mdconcierge.net`;
 const STOP = (t) => `${SITE}/unsubscribe.html?p=${t}`;
 // ---- Engaged track ---------------------------------------------------------------------------
 // A lead who clicked is the hottest signal we get, and the cold sequence deliberately drops them.
@@ -78,32 +107,32 @@ function engagedBody(n, p) {
   const t = p.funnel_token || '';
   // References the material they clicked without announcing that we watched them click it.
   const looked = CTA_LABEL[String(p.funnel_last_cta || '').toLowerCase()] || "the workers' compensation pharmacy ruling";
+  const intro = "We work with physicians individually and as groups. If there's someone else I should be speaking to about this, would you kindly make an introduction or pass along their details?";
   if (n === 1) {
     return `${dr},
 
 Following up on the note I sent about ${looked}.
 
-Hundreds of physicians already participate through our pharmacy partner, and the question it usually raises is what it would mean for your practice specifically. That is a fifteen minute conversation rather than an email. Pick whatever time suits you:
+Hundreds of physicians already participate through our pharmacy partner. What it's worth to your practice depends on your volume and what you prescribe, which is really a fifteen minute conversation rather than an email.
 
 ${link(t, 'book')}
 
-If a call is premature, just reply "send info" and I will send over more detail on how the program works, including the compliance opinion.
+If a call is premature, reply "send info" and I'll send the detail over instead, compliance opinion included.
 
 Best,`;
   }
   if (n === 2) {
     return `${dr},
 
-Coming back to ${looked} once more, then I will leave it with you.
+Coming back to ${looked} once more, then I'll leave it with you.
 
-Hundreds of practices are already participating, and the ones that move usually do it after a short call rather than more reading. Two ways forward, whichever is easier:
+Most of the practices that move on this do it after a short call rather than more reading. Fifteen minutes and I'll walk you through what it looks like for a practice your size.
 
-1. Fifteen minutes and I will walk you through what it looks like for a practice your size: ${link(t, 'book')}
-2. Reply "send info" and I will send the detail over instead, including the compliance opinion.
+${link(t, 'book')}
 
-If now is not the moment, tell me and I will stop.
+If you'd rather just have the detail, reply "send info" and I'll send it over.
 
-We work with physicians individually and as groups. If there is someone else I should be speaking to about this, would you kindly make an introduction or pass along their details?
+${intro}
 
 Best,`;
   }
@@ -111,11 +140,13 @@ Best,`;
 
 Last note from me on this.
 
-Hundreds of physicians are participating, and it costs a practice nothing to find out whether it fits. If workers' compensation is a meaningful part of yours, fifteen minutes is worth it: ${link(t, 'book')}
+If workers' compensation is a meaningful part of your practice, it costs nothing to find out whether this fits. Fifteen minutes whenever it suits you.
 
-Or reply "send info" and I will send the detail instead. If it is simply not for you, no reply needed and I will not chase.
+${link(t, 'book')}
 
-We work with physicians individually and as groups. If there is someone else I should be speaking to about this, would you kindly make an introduction or pass along their details?
+Or reply "send info" and I'll send the detail instead. If it's simply not for you, no reply needed and I won't chase.
+
+${intro}
 
 Best,`;
 }
@@ -224,7 +255,7 @@ async function run() {
     // them out of the cadence pool for good.
     const bodyText = touchBody(touch, p, hook)
       + `
-Eric
+${TEXT_SIG}
 
 If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
     await sPost('mdrx_outbox', {
@@ -261,12 +292,12 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
     const n = done + 1;
     const bodyText = engagedBody(n, p)
       + `
-Eric
+${TEXT_SIG}
 
 If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
     await sPost('mdrx_outbox', {
       provider_id: p.id, touch_no: n, to_email: p.email,
-      subject: ENGAGED_SUBJECT[n], body_text: bodyText, body_html: null,
+      subject: ENGAGED_SUBJECT[n], body_text: bodyText, body_html: mergeEngaged(n, p),
       status: 'pending', scheduled_date: today(),
     });
     await sPatch(`mdrx_providers?id=eq.${p.id}`, {
