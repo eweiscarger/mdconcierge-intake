@@ -49,9 +49,14 @@ const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v
 const today = () => new Date().toISOString().slice(0, 10);
 const addDaysISO = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
 
-// Clean, personal plain-text touches. No address, no unsubscribe. End at "Best,"
-// (the signature is attached at send time by the send-outreach function).
+// Clean, personal plain-text touches, ending at "Best," with the signature attached at send
+// time by send-outreach. Each carries a soft opt-out in Eric's own words: this is targeted
+// sales mail, not a marketing blast, so it reads as a personal offer to stop rather than a
+// compliance footer. It hits the same suppression plumbing either way.
 const link = (t, to) => `${SITE}/go.html?p=${t}&to=${to}`;
+// Soft opt-out. Same suppression plumbing as any opt-out link, worded as a personal
+// offer to stop rather than a marketing footer.
+const STOP = (t) => `${SITE}/unsubscribe.html?p=${t}`;
 function touchBody(touch, p, hook) {
   const dr = `Dr. ${p.last_name || ''}`.trim();
   const t = p.funnel_token || '';
@@ -140,7 +145,14 @@ async function run() {
       const op = openers[openerIdx % openers.length]; openerIdx++;
       if (op && op.draft_hook) { hook = op.draft_hook; contentId = op.id; }
     }
-    const bodyText = touchBody(touch, p, hook);
+    // The soft opt-out rides on the plain-text alternative too, so it is there however the
+    // mail renders. Clicking it suppresses them and moves them to Unsubscribed, which drops
+    // them out of the cadence pool for good.
+    const bodyText = touchBody(touch, p, hook)
+      + `
+Eric
+
+If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
     await sPost('mdrx_outbox', {
       provider_id: p.id, touch_no: touch, to_email: p.email,
       subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText,
