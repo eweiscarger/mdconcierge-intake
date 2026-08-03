@@ -86,75 +86,72 @@ Founder, MDconcierge
 eric@mdconcierge.net
 mdconcierge.net`;
 const STOP = (t) => `${SITE}/unsubscribe.html?p=${t}`;
-// ---- Engaged track ---------------------------------------------------------------------------
-// A lead who clicked is the hottest signal we get, and the cold sequence deliberately drops them.
-// Previously they landed in a recommendations queue and went quiet: twenty of them sat untouched,
-// one after opening Touch 1 thirty-three times. So engagement now starts its OWN short sequence
-// that runs through the same outbox as everything else. It leads with what they actually clicked,
-// closes for a call, and offers an easy yes for anyone not ready to book. It leads on social
-// proof because the physician's real question is not whether this is legal, it is who else
-// like them is already doing it.
-const CTA_LABEL = {
-  decision: 'the June 16 Supreme Court decision',
-  siegel: "Daniel Siegel's analysis",
-  gosfield: "Alice Gosfield's legal analysis",
-  program: 'the program overview',
-  writeups: 'the write-ups',
-  book: 'the calendar',
+// ---- Engaged drip -----------------------------------------------------------------------------
+// Marketing, not selling. Email is traffic: it educates, shows them what physicians like them are
+// doing, and drives one action. The selling happens on the Zoom.
+//
+// Three rules it is built to:
+//   Phone length. Nothing longer than a thumb-scroll, so one idea per email and no scaffolding.
+//   Custom to what they actually engaged with. The pillar is chosen by their last click and the
+//   peer line by their specialty, so it reads as though it was written for them, which it was.
+//   A reason to book that is a deliverable, not a meeting. "Fifteen minutes" is a cost. "You will
+//   see your own number on screen" is a thing they receive, and it is the one thing email cannot
+//   give them, which is precisely why it earns the call.
+//
+// Nothing references what they opened or how often. The customisation is silent.
+
+// What a physician in this specialty calls his own kind. Peer proof only works in their language.
+const PEER = {
+  orthopedics: 'orthopedic groups',
+  orthopedic: 'orthopedic groups',
+  podiatry: 'foot and ankle practices',
+  'foot & ankle': 'foot and ankle practices',
+  neurology: 'neurology practices',
+  pain: 'pain practices',
+  'pain medicine, interventional pain medicine': 'interventional pain practices',
+  'interventional spine': 'interventional spine practices',
+  'physical medicine & rehabilitation': 'physiatry practices',
+  'occupational medicine': 'occupational medicine practices',
+  'psychiatry & neurology, neurology': 'neurology practices',
 };
+const peerPhrase = (s) => PEER[String(s || '').toLowerCase().trim()] || 'practices';
+
+// One pillar per email, chosen by the last thing they clicked. Each is the single most useful next
+// fact for someone who just consumed that material, in two sentences or fewer.
+const PILLAR = {
+  decision: (p) => `The June 16 ruling means a Pennsylvania physician can hold a financial interest in the pharmacy filling his workers' compensation prescriptions. An insurer cannot refuse to pay because of it.`,
+  siegel: (p) => `Siegel argued the case, and his read is the practical one: you can refer work comp prescriptions to a pharmacy you have an interest in, and the insurer still has to pay.`,
+  gosfield: (p) => `Gosfield's firm in Philadelphia put a favorable opinion in writing. It covers workers' compensation only and leaves imaging, therapy and the rest exactly as they were.`,
+  program: (p) => `Nothing changes clinically, and nothing changes for your staff. The pharmacy handles fulfillment, billing and collections. The work comp scripts you already write simply stop leaving the practice.`,
+  writeups: (p) => `Nothing changes clinically, and nothing changes for your staff. The pharmacy handles fulfillment, billing and collections. The work comp scripts you already write simply stop leaving the practice.`,
+  book: (p) => `You had the calendar open, so I will keep this to one line: fifteen minutes is all it takes to see what this is worth for your own volume.`,
+  'request-info': (p) => `You have the overview. The one thing it cannot show you is what this is worth against your own volume and your own formulary.`,
+};
+const pillarFor = (p) => (PILLAR[String(p.funnel_last_cta || '').toLowerCase()] || PILLAR.decision)(p);
+
+// The reason to take the call, stated as something they receive.
+const DELIVERABLE = `On a fifteen minute Zoom I will put your own volume into it and show you the number on screen.`;
+
 function engagedBody(n, p) {
   const dr = `Dr. ${p.last_name || ''}`.trim();
   const t = p.funnel_token || '';
-  // References the material they clicked without announcing that we watched them click it.
-  const looked = CTA_LABEL[String(p.funnel_last_cta || '').toLowerCase()] || "the workers' compensation pharmacy ruling";
-  const intro = "We work with physicians individually and as groups. If there's someone else I should be speaking to about this, would you kindly make an introduction or pass along their details?";
+  const peers = peerPhrase(p.specialty);
+  const book = link(t, 'book');
   if (n === 1) {
-    return `${dr},
-
-Following up on the note I sent about ${looked}.
-
-Hundreds of physicians already participate through our pharmacy partner. What it's worth to you depends on your work comp volume and what you prescribe, so a short call or Zoom is worth more than anything I can put in an email. Fifteen minutes: I ask how your practice runs, then I show you on screen what it would look like for you specifically.
-
-${link(t, 'book')}
-
-If that's premature, reply "send info" and I'll send the detail over instead, compliance opinion included.
-
-Best,`;
+    return `${dr},\n\n${pillarFor(p)}\n\nHundreds of physicians are participating, ${peers} among them.\n\n${DELIVERABLE} Most decide from that one screen.\n\n${book}\n\nBest,`;
   }
   if (n === 2) {
-    return `${dr},
-
-Coming back to ${looked} once more, then I'll leave it with you.
-
-Most of the physicians or practices that move on this do it after a short call or Zoom rather than more reading. Fifteen minutes, and I'll build it around your own numbers while we talk rather than send you a generic example.
-
-${link(t, 'book')}
-
-If you'd rather just have the detail, reply "send info" and I'll send it over.
-
-${intro}
-
-Best,`;
+    return `${dr},\n\nThe usual question is how to try this without disrupting anything.\n\nYou don't have to commit the practice. Most start with a modest rollout, one office or a handful of providers, and evaluate from there.\n\nFifteen minutes on Zoom and I'll show you what that looks like against your own numbers.\n\n${book}\n\nOr reply "info" and I'll send the detail instead.\n\nBest,`;
   }
-  return `${dr},
-
-Last note from me on this.
-
-If workers' compensation is a meaningful part of your practice, it costs nothing to find out whether this fits. Fifteen minutes whenever it suits you.
-
-${link(t, 'book')}
-
-Or reply "send info" and I'll send the detail instead. If it's simply not for you, no reply needed and I won't chase.
-
-${intro}
-
-Best,`;
+  return `${dr},\n\nLast note from me on this.\n\nIf workers' compensation is a meaningful part of your practice, the fifteen minutes pays for itself: you see your own number and decide from there.\n\n${book}\n\nIf it isn't for you, no reply needed. And if there's someone else I should be speaking to, an introduction would be appreciated.\n\nBest,`;
 }
 
+// Subjects are the ad. Short, lower case where it reads more like a person, and specific to the
+// one idea inside. No brackets, no emoji, nothing that smells of a campaign.
 const ENGAGED_SUBJECT = {
-  1: 'A quick call on what this means for your practice',
-  2: 'Fifteen minutes, or I can send the detail over',
-  3: 'Leaving this with you',
+  1: 'What this is worth for your volume',
+  2: 'You can start with one office',
+  3: 'Closing this out',
 };
 
 function touchBody(touch, p, hook) {
@@ -271,7 +268,7 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
   // Engaged leads run their own track, queued into the same outbox so there is one place to
   // approve from. E1 goes the morning after they click, E2 three days later, E3 a week after
   // that. Replying, booking or opting out still takes them out entirely, as before.
-  const eng = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,engaged_touch,engaged_at,funnel_next_date,funnel_last_cta&lead_type=eq.funnel&funnel_stage=eq.Engaged&email=not.is.null&suppressed=eq.false&order=engaged_at.asc`);
+  const eng = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_token,email,engaged_touch,engaged_at,funnel_next_date,funnel_last_cta&lead_type=eq.funnel&funnel_stage=eq.Engaged&email=not.is.null&suppressed=eq.false&order=engaged_at.asc`);
   let engCount = 0;
   for (const p of eng) {
     if (queued.has(p.id)) continue;
