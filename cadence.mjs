@@ -113,11 +113,11 @@ function engagedBody(n, p) {
 
 Following up on the note I sent about ${looked}.
 
-Hundreds of physicians already participate through our pharmacy partner. What it's worth to your practice depends on your volume and what you prescribe, which is really a fifteen minute conversation rather than an email.
+Hundreds of physicians already participate through our pharmacy partner. What it's worth to you depends on your work comp volume and what you prescribe, so a short call or Zoom is worth more than anything I can put in an email. Fifteen minutes: I ask how your practice runs, then I show you on screen what it would look like for you specifically.
 
 ${link(t, 'book')}
 
-If a call is premature, reply "send info" and I'll send the detail over instead, compliance opinion included.
+If that's premature, reply "send info" and I'll send the detail over instead, compliance opinion included.
 
 Best,`;
   }
@@ -126,7 +126,7 @@ Best,`;
 
 Coming back to ${looked} once more, then I'll leave it with you.
 
-Most of the physicians or practices that move on this do it after a short call or Zoom rather than more reading. Fifteen minutes and I'll walk you through what it looks like for a practice your size.
+Most of the physicians or practices that move on this do it after a short call or Zoom rather than more reading. Fifteen minutes, and I'll build it around your own numbers while we talk rather than send you a generic example.
 
 ${link(t, 'book')}
 
