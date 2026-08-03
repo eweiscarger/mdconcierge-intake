@@ -57,6 +57,75 @@ const link = (t, to) => `${SITE}/go.html?p=${t}&to=${to}`;
 // Soft opt-out. Same suppression plumbing as any opt-out link, worded as a personal
 // offer to stop rather than a marketing footer.
 const STOP = (t) => `${SITE}/unsubscribe.html?p=${t}`;
+// ---- Engaged track ---------------------------------------------------------------------------
+// A lead who clicked is the hottest signal we get, and the cold sequence deliberately drops them.
+// Previously they landed in a recommendations queue and went quiet: twenty of them sat untouched,
+// one after opening Touch 1 thirty-three times. So engagement now starts its OWN short sequence
+// that runs through the same outbox as everything else. It leads with what they actually clicked,
+// closes for a call, and offers an easy yes for anyone not ready to book. It leads on social
+// proof because the physician's real question is not whether this is legal, it is who else
+// like them is already doing it.
+const CTA_LABEL = {
+  decision: 'the June 16 Supreme Court decision',
+  siegel: "Daniel Siegel's analysis",
+  gosfield: "Alice Gosfield's legal analysis",
+  program: 'the program overview',
+  writeups: 'the write-ups',
+  book: 'the calendar',
+};
+function engagedBody(n, p) {
+  const dr = `Dr. ${p.last_name || ''}`.trim();
+  const t = p.funnel_token || '';
+  // References the material they clicked without announcing that we watched them click it.
+  const looked = CTA_LABEL[String(p.funnel_last_cta || '').toLowerCase()] || "the workers' compensation pharmacy ruling";
+  if (n === 1) {
+    return `${dr},
+
+Following up on the note I sent about ${looked}.
+
+Hundreds of physicians already participate through our pharmacy partner, and the question it usually raises is what it would mean for your practice specifically. That is a fifteen minute conversation rather than an email. Pick whatever time suits you:
+
+${link(t, 'book')}
+
+If a call is premature, just reply "send info" and I will send over more detail on how the program works, including the compliance opinion.
+
+Best,`;
+  }
+  if (n === 2) {
+    return `${dr},
+
+Coming back to ${looked} once more, then I will leave it with you.
+
+Hundreds of practices are already participating, and the ones that move usually do it after a short call rather than more reading. Two ways forward, whichever is easier:
+
+1. Fifteen minutes and I will walk you through what it looks like for a practice your size: ${link(t, 'book')}
+2. Reply "send info" and I will send the detail over instead, including the compliance opinion.
+
+If now is not the moment, tell me and I will stop.
+
+We work with physicians individually and as groups. If there is someone else I should be speaking to about this, would you kindly make an introduction or pass along their details?
+
+Best,`;
+  }
+  return `${dr},
+
+Last note from me on this.
+
+Hundreds of physicians are participating, and it costs a practice nothing to find out whether it fits. If workers' compensation is a meaningful part of yours, fifteen minutes is worth it: ${link(t, 'book')}
+
+Or reply "send info" and I will send the detail instead. If it is simply not for you, no reply needed and I will not chase.
+
+We work with physicians individually and as groups. If there is someone else I should be speaking to about this, would you kindly make an introduction or pass along their details?
+
+Best,`;
+}
+
+const ENGAGED_SUBJECT = {
+  1: 'A quick call on what this means for your practice',
+  2: 'Fifteen minutes, or I can send the detail over',
+  3: 'Leaving this with you',
+};
+
 function touchBody(touch, p, hook) {
   const dr = `Dr. ${p.last_name || ''}`.trim();
   const t = p.funnel_token || '';
@@ -68,7 +137,7 @@ function touchBody(touch, p, hook) {
   }
   if (touch === 2) return `${dr},\n\nI sent you a note about the June 16 Pennsylvania Supreme Court decision on workers' compensation prescriptions. The practical question it raises is how a physician participates without dispensing or running a pharmacy, so here is how the model actually works.\n\nAlice Gosfield, a Philadelphia health law attorney, described the structure in her June 2026 analysis:\n\n- The physician, or an entity the physician owns, buys the workers' compensation claim from the provider that supplied the goods.\n- The claim is submitted showing the actual provider who supplied the goods, with the physician's entity as the payee.\n- The selling provider takes a discounted rate and avoids insurance billing. The physician's entity takes the risk of the insurer paying.\n\nThere is a reason the model is built around the claim rather than dispensing. In 2014 the Pennsylvania legislature adopted a provision essentially prohibiting physicians from dispensing drugs to workers' compensation patients. That has not changed. Participation comes through the claim, which is why no one needs to own, staff, or operate a pharmacy.\n\nGosfield is direct about the standing of the model: it is not prohibited in Pennsylvania, although no court has ruled on it either.\n\nThe source material again, for reference:\n- Alice Gosfield, Factoring and Self-Referral: ${link(t, 'gosfield')}\n- Pennsylvania Supreme Court decision (700 Pharmacy): ${link(t, 'decision')}\n- Daniel Siegel's practical analysis: ${link(t, 'siegel')}\n\nIf you'd like to talk it through, reply with a few times that suit you and I'll work around your schedule, or pick a time on my calendar. Questions by email are just as welcome.\n\nMore about our program: ${link(t, 'program')}\nBook a call: ${link(t, 'book')}\n\nBest,`;
   if (touch === 3) return `${dr},\n\nTwo notes ago I sent you the June 16 Pennsylvania Supreme Court decision. The limits matter as much as the opening, so this one covers where it stops.\n\n- The named services are still restricted. Self-referral remains prohibited for laboratory, physical therapy, rehabilitation, chiropractic, radiation oncology, psychometric, home infusion therapy, and diagnostic imaging. If your practice has an interest in any of those, nothing here changes it.\n- It does not reach federal claims. Federal reassignment rules, often called the anti-factoring rules, do not permit this structure. Workers' compensation only.\n- It does not reach laboratory services. The Eliminating Kickbacks in Recovery Act carries its own prohibitions that extend beyond federal payers to private insurance.\n- The legislature could change it. The Court noted that if lawmakers want prescription drugs on the prohibited list, they can add them.\n\nThe decision was 5 to 2. The Court held that the services the statute names are the only ones the prohibition reaches, and that if the legislature had meant to include pharmacy and drugs, it could have said so as it did elsewhere in the same statute.\n\nBoth analyses cover the limits in full:\n- Daniel Siegel's practical analysis: ${link(t, 'siegel')}\n- Alice Gosfield, Factoring and Self-Referral: ${link(t, 'gosfield')}\n- Pennsylvania Supreme Court decision: ${link(t, 'decision')}\n\nIf you'd like to talk it through, reply with a few times that suit you and I'll work around your schedule, or pick a time on my calendar. Questions by email are just as welcome.\n\nMore about our program: ${link(t, 'program')}\nBook a call: ${link(t, 'book')}\n\nBest,`;
-  return `${dr},\n\nI'll close the loop here so I'm not crowding your inbox. If workers' compensation isn't a meaningful part of your practice, this simply isn't relevant, and that's a perfectly good answer.\n\nThe materials stay available whenever they're useful:\n- Pennsylvania Supreme Court decision (700 Pharmacy): ${link(t, 'decision')}\n- Daniel Siegel's practical analysis: ${link(t, 'siegel')}\n- Alice Gosfield, Factoring and Self-Referral: ${link(t, 'gosfield')}\n- Overview of our Workers' Compensation Pharmacy Platform: ${link(t, 'program')}\n\nIf your situation changes, or a colleague is looking at this, I'm easy to reach. Reply with a few times that suit you and I'll work around your schedule, or pick a time on my calendar. Either way, I wish you and your patients well.\n\nBook a call: ${link(t, 'book')}\n\nBest,`;
+  return `${dr},\n\nI'll close the loop here so I'm not crowding your inbox. If workers' compensation isn't a meaningful part of your practice, this simply isn't relevant, and that's a perfectly good answer.\n\nThe materials stay available whenever they're useful:\n- Pennsylvania Supreme Court decision (700 Pharmacy): ${link(t, 'decision')}\n- Daniel Siegel's practical analysis: ${link(t, 'siegel')}\n- Alice Gosfield, Factoring and Self-Referral: ${link(t, 'gosfield')}\n- Overview of our Workers' Compensation Pharmacy Platform: ${link(t, 'program')}\n\nWe work with physicians individually and as groups, so if there is someone else at the practice I should be speaking to, would you kindly make an introduction or pass along their details?\n\nIf your situation changes, or a colleague is looking at this, I'm easy to reach. Reply with a few times that suit you and I'll work around your schedule, or pick a time on my calendar. Either way, I wish you and your patients well.\n\nBook a call: ${link(t, 'book')}\n\nBest,`;
 }
 const SUBJECTS = {
   1: "PA Court Opens Up Significant Revenue Opportunity for Physicians",
@@ -128,13 +197,18 @@ async function run() {
   pool.sort((a, b) => (CONF_RANK(a.email_confidence) - CONF_RANK(b.email_confidence))
     || String(a.funnel_next_date || '').localeCompare(String(b.funnel_next_date || '')));
 
-  let queuedCount = 0; const practicesToday = new Set();
+  let queuedCount = 0; const practicesToday = new Map();
   for (const p of pool) {
     if (queuedCount >= room) break;
     if (queued.has(p.id)) continue;
     if (suppressed.has((p.email || '').toLowerCase())) continue;
     const prac = (p.practice_name || '').toLowerCase();
-    if (prac && practicesToday.has(prac)) continue; // pace by practice: max one per office per run
+    // Each physician is his own deal, not a seat on a practice contract, so pacing at one per
+    // office per run throttled the biggest and best-fit practices to a trickle: Premier's 54
+    // physicians would have taken eleven weeks to reach once. Three keeps a same-domain burst
+    // small enough to stay clean while the daily cap still governs total volume.
+    const pracCount = practicesToday.get(prac) || 0;
+    if (prac && pracCount >= 3) continue;
     const touch = (p.touch_count || 0) + 1;
     if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
     // A/B: a recycled lead's first touch leads with a fresh, approved news opener instead of repeating Touch 1.
@@ -160,10 +234,50 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
       status: 'pending', scheduled_date: today(), content_id: contentId,
     });
     if (contentId) { const cur = await sGet(`mdrx_content_queue?select=used_count&id=eq.${contentId}`); await sPatch(`mdrx_content_queue?id=eq.${contentId}`, { used_count: ((cur[0] && cur[0].used_count) || 0) + 1 }); }
-    if (prac) practicesToday.add(prac);
+    if (prac) practicesToday.set(prac, (practicesToday.get(prac) || 0) + 1);
     queued.add(p.id); queuedCount++;
   }
+  // Engaged leads run their own track, queued into the same outbox so there is one place to
+  // approve from. E1 goes the morning after they click, E2 three days later, E3 a week after
+  // that. Replying, booking or opting out still takes them out entirely, as before.
+  const eng = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,engaged_touch,engaged_at,funnel_next_date,funnel_last_cta&lead_type=eq.funnel&funnel_stage=eq.Engaged&email=not.is.null&suppressed=eq.false&order=engaged_at.asc`);
+  let engCount = 0;
+  for (const p of eng) {
+    if (queued.has(p.id)) continue;
+    if (suppressed.has((p.email || '').toLowerCase())) continue;
+    const done = p.engaged_touch || 0;
+    if (done >= 3) {
+      await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle after engaged track', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) });
+      continue;
+    }
+    // E1 waits three days after the click. Same-day or next-day reads as surveillance to a
+    // physician evaluating a compliance-sensitive program, and the click has already done its
+    // job by raising them on the Cockpit for a call today if Eric wants one.
+    const engagedOn = String(p.engaged_at || '').slice(0, 10);
+    const due = done === 0
+      ? (engagedOn && addDaysISO(-3) >= engagedOn)
+      : !p.funnel_next_date || p.funnel_next_date <= today();
+    if (!due) continue;
+    const n = done + 1;
+    const bodyText = engagedBody(n, p)
+      + `
+Eric
+
+If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
+    await sPost('mdrx_outbox', {
+      provider_id: p.id, touch_no: n, to_email: p.email,
+      subject: ENGAGED_SUBJECT[n], body_text: bodyText, body_html: null,
+      status: 'pending', scheduled_date: today(),
+    });
+    await sPatch(`mdrx_providers?id=eq.${p.id}`, {
+      engaged_touch: n,
+      funnel_next_date: addDaysISO(n === 1 ? 7 : 14),
+      next_step: n === 3 ? 'Engaged track finished, recycle if silent' : `Engaged follow-up ${n + 1}`,
+    });
+    queued.add(p.id); engCount++;
+  }
+
   const daysIn = cfg.warmup_started_at ? Math.floor((Date.now() - new Date(cfg.warmup_started_at).getTime()) / 86400000) + 1 : 1;
-  console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} touch(es) for approval. Recycled ${rec.length}.`);
+  console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} cold touch(es) and ${engCount} engaged follow-up(s) for approval. Recycled ${rec.length}.`);
 }
 run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
