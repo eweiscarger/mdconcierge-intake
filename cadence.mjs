@@ -126,7 +126,7 @@ Best,`;
 
 Coming back to ${looked} once more, then I'll leave it with you.
 
-Most of the practices that move on this do it after a short call rather than more reading. Fifteen minutes and I'll walk you through what it looks like for a practice your size.
+Most of the physicians or practices that move on this do it after a short call or Zoom rather than more reading. Fifteen minutes and I'll walk you through what it looks like for a practice your size.
 
 ${link(t, 'book')}
 
