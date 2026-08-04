@@ -137,10 +137,23 @@ async function main() {
           routedAction = 'Not Interested';
           if (prov) { await sPatch(`mdrx_providers?id=eq.${prov.id}`, { funnel_stage: 'Not Interested', funnel_next_date: null }); routed++; }
         } else { // workable
-          routedAction = 'Engaged/flagged';
+          routedAction = 'Replied/flagged';
           if (prov) {
+            // A reply ends the sequence. Not just for cold leads: the old rule only moved
+            // New/Queued/Contacted, so a physician who was already Engaged or Hot stayed on an
+            // active track and could be emailed again by the machine after writing to Eric.
+            // That is the single worst thing this system can do, so the stop is unconditional
+            // for anyone still being pursued. Stages past the pursuit (booked, closing, won)
+            // keep their place; a reply there is part of the conversation, not the start of one.
+            const KEEP = new Set(['Meeting Booked', 'Closing', 'Won', 'Unsubscribed', 'Not Interested']);
             const patch = { needs_attention: true, funnel_last_seen_at: new Date().toISOString() };
-            if (COLD.has(prov.funnel_stage)) { patch.funnel_stage = 'Engaged'; patch.priority = 'high'; patch.funnel_next_date = null; if (!prov.engaged_at) patch.engaged_at = new Date().toISOString(); }
+            if (!KEEP.has(String(prov.funnel_stage || ''))) {
+              patch.funnel_stage = 'Replied';
+              patch.priority = 'high';
+              patch.funnel_next_date = null;          // nothing is due; Eric answers a human
+              patch.next_step = 'They replied. Answer them.';
+              if (!prov.engaged_at) patch.engaged_at = new Date().toISOString();
+            }
             await sPatch(`mdrx_providers?id=eq.${prov.id}`, patch); routed++;
           }
         }
