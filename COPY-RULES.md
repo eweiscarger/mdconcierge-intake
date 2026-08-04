@@ -1,0 +1,60 @@
+# Copy rules
+
+Every outbound email is checked against this before it is shown to Eric. These are not
+suggestions and they are not to be re-derived each time. Each line is here because Eric had to
+say it at least once.
+
+## Structure
+
+1. **Subject is always the Touch 1 subject** unless Eric names a different one:
+   `PA Court Opens Up Significant Revenue Opportunity for Physicians`
+2. **Lead with the opportunity, not with yourself.** A warm opener is at most two sentences,
+   and only when a real prior relationship exists. An email that says "I moved on to this"
+   without naming the June 16 ruling and what the program is has no proposition in it.
+3. **One email per physician.** Never address two or three people in one note, even partners.
+   Each gets their own tracking token, and the familiarity line varies per person.
+4. **Stagger partners at the same practice** across days. Never the same morning.
+
+## What the message is
+
+In this order:
+
+1. **Patient.** The medication is delivered to their door overnight. Nothing to chase at a
+   retail counter that may not stock it.
+2. **Admin relief.** If the script comes in, it gets dispensed. No denials, no prior
+   authorizations landing on the staff.
+3. **The physician's benefit.** The revenue those prescriptions already generate comes back to
+   the physician rather than a pharmacy benefits manager with no role in the treatment.
+4. **How little changes.** They are already writing the prescriptions. They change the pharmacy
+   in the EHR. That is the whole implementation.
+5. **How they participate.** Individually or through the practice, whichever suits. Hospital
+   physicians often set up an LLC where their contract permits.
+
+## Never
+
+- **Never reveal tracking.** Not "I saw you had a chance to look", not "thanks for taking a
+  look", not a reference to anything they clicked or read. Eric: "we don't want him to know we
+  are surveilling him."
+- **Never mention office dispensing.** It is banned in Pennsylvania work comp and raises an
+  objection the physician did not have. The program is 100% mail order.
+- **Never British spelling.** authorization, organization, recognize, realize.
+- **Never em dashes or en dashes.** Periods and commas. Ranges in words: "20 to 30 minutes".
+- **Never "checking in", "circling back", "following up", "touching base", "any thoughts".**
+- **Never invent a number, a name, a legal conclusion or a claim about their business.**
+- **Never ask who else handles this** until a lead has gone quiet. It reads as giving up on them.
+- **Never a second email inside 18 hours**, and never a same-day "repair" email after a mistake.
+  The next contact goes on its normal beat.
+
+## Facts Eric is the source for
+
+Do not hedge these and do not ask him to verify them again:
+
+- Hundreds of physicians are already participating, some individually, some through a practice.
+- If the prescription comes in, it gets dispensed. No denials.
+- Delivery is overnight to the patient's home.
+- The program is 100% mail order on the state workers' compensation pharmacy fee schedule.
+
+## Length
+
+Fits a phone screen. If it is longer than the pinned Touch 1, it is too long. If it is short
+enough to fit but says nothing about the opportunity, it is worthless.
