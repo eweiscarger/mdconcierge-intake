@@ -11,6 +11,7 @@ const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) { if (!v) { console.error('Missing env: ' + k); process.exit(1); } }
 
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 const SITE = 'https://mdconcierge.net';
 
@@ -83,6 +84,17 @@ const mergeTouch = (touch, p, hook) => {
     .replace(/\{\{last\}\}/g, p.last_name || '')
     .replace(/\{\{token\}\}/g, p.funnel_token || '');
 };
+// No email may leave with an empty tracking token. A blank token silently destroys attribution:
+// funnel-track drops the click, the lead never promotes, and the drip never fires.
+async function ensureToken(p) {
+  if (p.funnel_token && String(p.funnel_token).trim()) return p.funnel_token;
+  const tok = randomUUID().replace(/-/g, '');
+  await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_token: tok });
+  p.funnel_token = tok;
+  console.log(`  minted tracking token for ${p.last_name} (#${p.id}) - was blank`);
+  return tok;
+}
+
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
 const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
 const sPost = async (t, row, prefer = 'return=minimal') => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: prefer }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
@@ -281,6 +293,7 @@ async function run() {
     // The soft opt-out rides on the plain-text alternative too, so it is there however the
     // mail renders. Clicking it suppresses them and moves them to Unsubscribed, which drops
     // them out of the cadence pool for good.
+    await ensureToken(p);
     const bodyText = touchBody(touch, p, hook)
       + `
 ${TEXT_SIG}
@@ -335,6 +348,7 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
       if (!due) continue;
 
       const step = done + 1;
+      await ensureToken(p);
       const bodyText = bodyFn(step, p)
         + `\n${TEXT_SIG}\n\nIf you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
       await sPost('mdrx_outbox', {
