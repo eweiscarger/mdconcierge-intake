@@ -19,7 +19,14 @@ const sPost = async (t, row, prefer = 'return=minimal') => { const r = await fet
 const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`patch ${p} ${r.status}: ${await r.text()}`); };
 const daysAgoISO = (n) => new Date(Date.now() - n * 86400000).toISOString();
 
-const BOUNCE_FROM = /mailer-daemon|mailerdaemon|postmaster|mail delivery (subsystem|system)|delivery.?(status|failure)|no-?reply/i;
+// Senders that actually report delivery failures. "no-reply" used to be in here and it was
+// catastrophic: noreply-dmarc-support@google.com sends the daily DMARC aggregate report because
+// our own DMARC record asks for it, and noreply@zohocalendar.com sends meeting reminders. Both
+// were being filed as hard bounces, which invented a 5.2% failure rate out of nothing and
+// auto-paused the entire campaign.
+const BOUNCE_FROM = /mailer-daemon|mailerdaemon|postmaster|mail delivery (subsystem|system)|delivery.?(status|failure)/i;
+// Routine machine mail that is emphatically not a bounce, regardless of who it came from.
+const NOT_A_BOUNCE = /^report domain:|dmarc|aggregate report|invitation to .* accepted|^reminder:|^invitation:|^accepted:|^declined:|calendar/i;
 const BOUNCE_SUBJ = /undeliverable|delivery status notification|failure notice|returned mail|delivery has failed|mail delivery failed|address not found|delivery incomplete|could ?n.?t be delivered|message not delivered/i;
 const COMPLAINT = /\bspam\b|abuse report|feedback loop|complaint|reported as (spam|junk)/i;
 const HARD = /\b5\.\d\.\d\b|\b55[0-4]\b|does not exist|user unknown|no such user|mailbox (unavailable|not found|does not exist)|address rejected|recipient (rejected|not found)|account.*(disabled|closed)|no mailbox|invalid recipient|unknown recipient/i;
@@ -72,6 +79,7 @@ async function main() {
       const subject = env.subject || '';
       const mid = env.messageId || ('uid:' + m.uid);
       if (seen.has(mid)) continue;
+      if (NOT_A_BOUNCE.test(subject)) continue;   // DMARC reports, calendar traffic, and the like
       const looksBounce = BOUNCE_FROM.test(from) || BOUNCE_SUBJ.test(subject) || COMPLAINT.test(subject);
       if (!looksBounce) continue;
       let bodyText = '';
@@ -82,6 +90,10 @@ async function main() {
       const targets = [...new Set((bodyText.match(EMAIL_RE) || []).map((e) => e.toLowerCase()))].filter((e) => ours.has(e));
       const { cause, code } = classifyBounce(blob);
       const type = isComplaint ? 'complaint' : cause === 'soft' ? 'soft' : 'hard';
+      // A real delivery failure always names the address that failed. If we cannot find one of
+      // ours in the message, this is not a bounce we can act on, and counting it would poison the
+      // rate that governs the circuit breaker. Log nothing, file it away, move on.
+      if (!targets.length && !isComplaint) { fileAway.push(m.uid); seen.add(mid); continue; }
       await sPost('bounce_events', { email: targets[0] || null, bounce_type: type, message_uid: mid, subject: subject.slice(0, 200), occurred_at: env.date || new Date().toISOString(), cause, status_code: code || null }, 'resolution=ignore-duplicates,return=minimal');
       seen.add(mid);
       fileAway.push(m.uid);         // logged, so get it out of Eric's inbox either way
@@ -98,7 +110,18 @@ async function main() {
           await sPost('suppressions', { email: e, reason: `${cause} bounce${code ? ' ' + code : ''}`, source: 'bounce-scan', provider_id: emailToId[e] || null }, 'resolution=merge-duplicates,return=minimal');
           suppressed.add(e);
         }
-        if (emailToId[e]) await sPatch(`mdrx_providers?id=eq.${emailToId[e]}`, { suppressed: true, funnel_stage: 'Unsubscribed', unsubscribed_at: new Date().toISOString(), funnel_next_date: null });
+        // A complaint is a refusal and belongs in Unsubscribed. A hard bounce is a data error:
+        // the physician never saw anything and never said no, so filing him as unsubscribed buries
+        // a live prospect and inflates the opt-out rate with typos. He comes out of the sending
+        // pool either way, but a bounce is routed for a corrected address instead.
+        if (emailToId[e]) {
+          const patch = type === 'complaint'
+            ? { suppressed: true, funnel_stage: 'Unsubscribed', unsubscribed_at: new Date().toISOString(), funnel_next_date: null, next_step: null }
+            : { suppressed: true, funnel_stage: 'Bad Address', bounced_at: new Date().toISOString(), funnel_next_date: null,
+                needs_attention: true, email_confidence: 'X_bounced',
+                next_step: 'Address bounced. Find a current one, then it re-enters the cadence' };
+          await sPatch(`mdrx_providers?id=eq.${emailToId[e]}`, patch);
+        }
         // Only chase a DEAD mailbox. A deliberate block is their decision, and we honour it.
         if (cause === 'dead' && emailToId[e]) relocate.push(emailToId[e]);
         if (type === 'hard') newHard.push(e); else complaints.push(e);
@@ -193,9 +216,20 @@ async function main() {
   let paused = false, reason = '';
   if (complaints.length) { paused = true; reason = `spam complaint from ${complaints.join(', ')}`; }
   else if (rate >= 0.05) { paused = true; reason = `hard-bounce rate ${(rate * 100).toFixed(1)}% (${hard7}/${sends7}) over 7 days`; }
-  if (paused && !cfg.sending_paused) {
+  // A manual resume has to survive this job. Otherwise the guard deadlocks: the only thing that
+  // lowers a bounce RATE is sending more mail, which it will not allow, so a campaign that trips
+  // the threshold once can never clear it and is re-paused every three hours forever. While a
+  // snooze is live the watchdog still watches and still alerts, it simply does not overrule Eric.
+  const snoozed = cfg.pause_snooze_until && new Date(cfg.pause_snooze_until) > new Date();
+  if (paused && !cfg.sending_paused && !snoozed) {
     await sPatch('outreach_config?id=eq.1', { sending_paused: true, pause_reason: reason });
     await alertEric('[MDconcierge] outreach AUTO-PAUSED', `Sending was auto-paused to protect your deliverability.\n\nReason: ${reason}\n\nHard bounces and complaints have been suppressed automatically. Review, then un-pause from the Cockpit when ready.`);
+  } else if (paused && snoozed) {
+    await alertEric('[MDconcierge] deliverability still poor, not re-pausing', `You resumed sending, so this is a warning rather than a pause.
+
+Reason: ${reason}
+
+The override holds until ${cfg.pause_snooze_until}. Address quality is the fix; the guard is only the alarm.`);
   }
   console.log(`bounce-scan: hard=${newHard.length} complaints=${complaints.length} | 7d rate ${(rate * 100).toFixed(1)}% (${hard7}/${sends7})${paused ? ' | PAUSED' : ''}`);
 }
