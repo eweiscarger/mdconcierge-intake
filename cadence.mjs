@@ -339,11 +339,15 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
         });
         continue;
       }
-      // Hot starts on the next run because he just asked for something. Warm waits three days,
-      // because same-day on a click reads as surveillance.
+      // Both tracks wait three days for their first message, for different reasons. Warm, because
+      // writing the same day someone clicked reads as surveillance. Hot, because asking for
+      // information already got him an answer: the brief goes out within seconds of the request,
+      // and following it the next morning with "fifteen minutes?" gives him no time to read the
+      // thing he asked for. Hot is still the faster track, it just does not start on top of the
+      // brief: day 3, then 6, then 10, against warm's 3, 10, 24.
       const startedOn = String((isHot ? p.hot_since : p.engaged_at) || '').slice(0, 10);
       const due = done === 0
-        ? (isHot ? true : (startedOn && addDaysISO(-3) >= startedOn))
+        ? (startedOn && addDaysISO(-3) >= startedOn)
         : (!p.funnel_next_date || p.funnel_next_date <= today());
       if (!due) continue;
 
