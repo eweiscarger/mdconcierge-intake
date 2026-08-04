@@ -1,0 +1,32 @@
+name: Meeting reminders
+# Alerts Eric the day before and about an hour before each booked call. SENDS ONLY TO ERIC -
+# never to the physician, who already has the Zoho calendar invite.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '5 * * * *'   # hourly, on the 5s
+
+concurrency:
+  group: booking-reminders
+  cancel-in-progress: false   # a skipped run means a missed meeting alert
+
+permissions:
+  contents: read
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Send due meeting reminders
+        env:
+          ZOHO_ERIC_USER: eric@mdconcierge.net
+          ZOHO_ERIC_APP_PASSWORD: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node booking-reminders.mjs
