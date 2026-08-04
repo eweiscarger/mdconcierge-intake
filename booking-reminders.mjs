@@ -36,7 +36,13 @@ async function notify(subject, html) {
 // What Eric actually needs in front of him before he dials: who, where they work, and what they
 // have already read, so he is not opening the CRM one minute before the call.
 async function brief(b) {
-  const bits = [`<p style="font-size:15px;"><b>${esc(b.name)}</b> &lt;${esc(b.email)}&gt;${b.phone ? ' &middot; ' + esc(b.phone) : ''}</p>`,
+  // The single most important line: is Eric dialling, or clicking. Put it first and make it loud,
+  // because a phone booking is a promise that only he can keep.
+  const action = b.meeting_mode === 'phone'
+    ? `<p style="font-size:17px;color:#b34700;margin:0 0 10px;"><b>YOU CALL THEM: ${esc(b.phone || 'no number on file')}</b></p>`
+    : `<p style="font-size:15px;margin:0 0 10px;">Video call${b.join_url ? ` &middot; <a href="${esc(b.join_url)}">join link</a>` : ' &middot; no room link configured'}</p>`;
+  const bits = [action,
+    `<p style="font-size:15px;"><b>${esc(b.name)}</b> &lt;${esc(b.email)}&gt;${b.phone ? ' &middot; ' + esc(b.phone) : ''}</p>`,
     `<p style="font-size:15px;">${esc(fmt(new Date(b.slot_start)))} &middot; ${b.meeting_type === 'demo' ? '60 minute demonstration' : '15 minutes'}</p>`];
   if (b.note) bits.push(`<p style="font-size:14px;">Their note: ${esc(b.note)}</p>`);
   if (b.provider_id) {
@@ -57,7 +63,8 @@ async function brief(b) {
 const run = async () => {
   const now = Date.now();
   // Only look at what is actually happening: confirmed bookings still in the future.
-  const rows = await sGet(`bookings?select=*&status=in.(booked,confirmed)&slot_start=gte.${new Date(now - 3600000).toISOString()}&order=slot_start`);
+  // Reach back far enough to catch meetings that have just finished, for the accountability pass.
+  const rows = await sGet(`bookings?select=*&status=in.(booked,confirmed)&slot_start=gte.${new Date(now - 26 * 3600000).toISOString()}&order=slot_start`);
   let sent = 0;
 
   for (const b of rows) {
@@ -79,6 +86,16 @@ const run = async () => {
       await notify(`In about an hour: ${b.name}`, `<p style="font-size:15px;">Starting soon.</p>${await brief(b)}`);
       await sPatch(`bookings?id=eq.${b.id}`, { reminded_hour_at: new Date().toISOString() });
       console.log(`hour-before sent: ${b.name} @ ${fmt(new Date(start))}`);
+      sent++;
+    }
+
+    // Accountability. A physician who chose "phone" is sitting waiting for Eric to ring - if the
+    // slot has passed and the call was never marked made, say so plainly rather than let it slide.
+    if (b.meeting_mode === 'phone' && !b.call_made_at && !b.nagged_at && mins < -20 && mins > -24 * 60) {
+      await notify(`Did you call ${b.name}?`, `<p style="font-size:16px;">This was your call to make and it is not marked done.</p>${await brief(b)}
+        <p style="font-size:14px;color:#4a5568;">If you spoke to them, mark it in the Cockpit. If you missed it, ring them now or send a line — they were expecting you.</p>`);
+      await sPatch(`bookings?id=eq.${b.id}`, { nagged_at: new Date().toISOString() });
+      console.log(`accountability nag sent: ${b.name}`);
       sent++;
     }
   }
