@@ -30,11 +30,29 @@ const SIGNATURE_HTML = readFileSync(new URL('./email-templates/signature.html', 
 const ENGAGED_HTML = readFileSync(new URL('./email-templates/engaged.html', import.meta.url), 'utf8');
 const P = 'style="font-size:14px;line-height:1.6;color:#33404f;margin:0 0 14px;"';
 // Turn the plain-text body into the card's paragraph markup, keeping links clickable.
+function btnLabel(url){
+  const to = (String(url).match(/[?&]to=([a-z_]+)/i) || ['', ''])[1].toLowerCase();
+  if (to === 'book') return 'See my calendar';
+  if (to === 'execbrief') return 'Read the brief';
+  if (to === 'model') return 'Open the model';
+  if (to === 'program' || to === 'brief' || to === 'overview') return 'See how it works';
+  return 'See the details';
+}
+
 function engagedHtmlBody(text){
   const NL = String.fromCharCode(10);
-  const paras = String(text || '').trim().split(NL + NL);
+  // Drop the trailing sign-off: the card prints its own above the signature block.
+  const trimmed = String(text || '').trim().replace(/(\r?\n)+Best,\s*$/, '');
+  const paras = trimmed.split(NL + NL);
   return paras.map(function(par){
-    const withLinks = esc(par.trim())
+    const line = par.trim();
+    // A paragraph that is only a link reads as a naked URL in an email. Make it the button.
+    if (/^https?:\/\/\S+$/.test(line)) {
+      return '<p style="margin:22px 0;"><a href="' + line + '" style="background:#08214C;color:#ffffff;'
+        + 'text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:9px;'
+        + 'display:inline-block;">' + btnLabel(line) + '</a></p>';
+    }
+    const withLinks = esc(line)
       .replace(new RegExp('(https?://\\S+)', 'g'), '<a href="$1" style="color:#2F5EA8;">$1</a>')
       .split(NL).join('<br>');
     return '<p ' + P + '>' + withLinks + '</p>';
@@ -45,6 +63,7 @@ function mergeEngaged(n, p, bodyFn){
     .split('{{body}}').join(engagedHtmlBody(bodyFn(n, p)))
     .split('{{signature}}').join(SIGNATURE_HTML)
     .split('{{last}}').join(p.last_name || '')
+    .split('{{optout}}').join('If you aren\'t interested, or don\'t wish to hear from me anymore, <a href="' + STOP(p.funnel_token || '') + '" style="color:#9aa3af;">click here</a> and I won\'t write again.')
     .split('{{token}}').join(p.funnel_token || '');
 }
 // No per-lead opener line. A generic specialty statement reads as filler to a physician
