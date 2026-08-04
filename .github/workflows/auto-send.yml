@@ -7,10 +7,14 @@ name: Send the day's outreach
 # Timed for late morning: of the physicians who can be proven to be real rather than mail
 # gateways, every one engaged in the 1pm hour, and almost none before 10am. This lands the mail
 # near the top of the inbox before they break between morning and afternoon clinic.
+# Runs every 15 minutes across the band that could contain a send window in any US timezone. It
+# does NOT decide when to send: each email carries its own randomised moment inside a permitted
+# window in the physician's own timezone, and this job simply gives the function chances to notice
+# that a moment has arrived. Changing the windows is a config edit, not a change to this file.
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '35 15 * * 1-5'   # weekdays 11:35am ET (15:35 UTC during EDT)
+    - cron: '*/15 10-21 * * 1-5'   # 10:00-21:00 UTC, weekdays: covers 6:30am ET through 1pm PT
 
 concurrency:
   group: auto-send
