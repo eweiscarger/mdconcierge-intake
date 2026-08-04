@@ -250,7 +250,7 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
   // Approved news openers, for A/B-rotating a fresh angle into recycled leads' first touch.
   const openers = await sGet(`mdrx_content_queue?select=id,draft_hook&status=eq.approved&kind=eq.opener&order=id.desc`);
@@ -326,7 +326,7 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
     const gaps = isHot ? [3, 4] : [7, 14];
     const jitter = () => (Math.random() < 0.5 ? 0 : 1);
 
-    const rows = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_token,email,${counter},engaged_at,hot_since,hot_reason,decision_authority,funnel_next_date,funnel_last_cta&lead_type=eq.funnel&funnel_stage=eq.${stage}&email=not.is.null&suppressed=eq.false&order=id.asc`);
+    const rows = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_token,email,${counter},engaged_at,hot_since,hot_reason,decision_authority,funnel_next_date,funnel_last_cta&lead_type=eq.funnel&funnel_stage=eq.${stage}&email=not.is.null&suppressed=eq.false&on_hold=eq.false&order=id.asc`);
     let n = 0;
     for (const p of rows) {
       if (queued.has(p.id)) continue;
