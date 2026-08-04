@@ -1,0 +1,44 @@
+name: Send the day's outreach
+# Sends whatever the cadence queued and is due, through the SAME send-outreach function the
+# Cockpit button calls, so every guard still applies: no blind tracking token, no cold email to
+# someone who has since engaged, nothing to a lead who replied or is on hold, and no second email
+# inside 18 hours. Emails Eric a digest of what went and what was held back.
+#
+# Timed for late morning: of the physicians who can be proven to be real rather than mail
+# gateways, every one engaged in the 1pm hour, and almost none before 10am. This lands the mail
+# near the top of the inbox before they break between morning and afternoon clinic.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '35 15 * * 1-5'   # weekdays 11:35am ET (15:35 UTC during EDT)
+
+concurrency:
+  group: auto-send
+  cancel-in-progress: false   # never cut a send run short
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Send what is due
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          MDC_CRON_SECRET: ${{ secrets.MDC_CRON_SECRET }}
+        run: |
+          resp=$(curl -sS -w '\n%{http_code}' -X POST \
+            'https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/send-outreach' \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "x-mdc-cron: $MDC_CRON_SECRET" \
+            -H 'Content-Type: application/json' \
+            -d '{}')
+          body=$(echo "$resp" | head -n -1)
+          code=$(echo "$resp" | tail -n 1)
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "send-outreach returned $code"
+            exit 1
+          fi
