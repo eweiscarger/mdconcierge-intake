@@ -45,6 +45,20 @@ In this order:
 - **Never a second email inside 18 hours**, and never a same-day "repair" email after a mistake.
   The next contact goes on its normal beat.
 
+## Naming
+
+- **Never name the pharmacy.** It is Excel Pharmacy, but we say "one of our in-network pharmacies"
+  or "an independent, licensed mail-order pharmacy." Eric: it is not advised to come out and say it.
+- **MDRx runs the program and is named.** MDRx is the workers' compensation billing and
+  revenue-cycle firm behind the pharmacy claims-purchasing arrangement: the physician's entity buys
+  the claim, MDRx bills the payer, collects, and remits the physician's share. Their name stays in
+  the copy. It is credibility, not a jolt to be managed. This supersedes the July decision to brand
+  everything "Workers' Compensation Pharmacy Platform" and keep MDRx out.
+- **MDRx is MDconcierge's partner.** Eric brings the physician in and runs the relationship;
+  MDRx runs the program.
+- **MDRx's own pages and documents are theirs.** Eric has no authority to reword them. Frame them
+  from our side instead; do not edit a line of them.
+
 ## Facts Eric is the source for
 
 Do not hedge these and do not ask him to verify them again:
