@@ -144,50 +144,8 @@ function routingAsk(p) {
   return `\n\nMany physicians take this on individually. Some larger groups handle it as a whole instead. If it is the group in your case, who should I be speaking to?`;
 }
 
-// WARM: he clicked something real. Answer what the click implies, then ask for the call, then close.
-function warmBody(n, p) {
-  const dr = `Dr. ${p.last_name || ''}`.trim();
-  const t = p.funnel_token || '';
-  const cta = String(p.funnel_last_cta || '').toLowerCase();
-  const legal = ['decision', 'siegel', 'gosfield'].includes(cta);
-  if (n === 1) {
-    // Answer what he has NOT been reading, and avoid anything the cold clock already said. A
-    // physician deep in the opinion is not short of legal comfort; the assumption he actually
-    // holds is that this means dispensing, which Pennsylvania banned for work comp in 2014.
-    // One who came in through the program overview knows what it is and wants to know it is safe.
-    return legal
-      ? `${dr},\n\nThe part that surprises most physicians is how much stops happening.\n\nYour patients get their medication delivered to their door rather than chasing a counter that may not stock it. Your staff stop fighting carriers over denials and prior authorizations. And the revenue those prescriptions already generate comes back to the practice.\n\n${link(t, 'program')}\n\nBest,`
-      // He read the overview, so he knows what it is. What he needs next is what happens now.
-      // Same three steps as Touch 3 and the overview page, word for word.
-      : `${dr},\n\nYou have seen how the program works. Here is how it usually goes from here.\n\n1. A call. We walk through the program and the formulary and answer your questions.\n\n2. You evaluate. We send the agreements for review, plus a tool where you enter your own medications and see how it looks for your practice.\n\n3. You decide. If you move forward, the agreements go out for signature, we run a short in-service with your staff, and you are set.\n\n${link(t, 'book')}\n\nOr tell me a time that suits you and I'll work around it.\n\nBest,`;
-  }
-  if (n === 2) {
-    return `${dr},\n\nHundreds of physicians are participating, ${peerPhrase(p.specialty)} among them. Most start with one office or a handful of providers and evaluate from there.\n\nThese are the times I have open:\n\n${link(t, 'book')}\n\nIf none of them suit, tell me what does.\n\nBest,`;
-  }
-  return `${dr},\n\nLast note from me on this.\n\nIf workers' compensation is a meaningful part of your practice, fifteen minutes will tell you whether it is worth pursuing.\n\n${link(t, 'book')}\n\nIf not, no reply needed and I won't chase.${routingAsk(p)}\n\nBest,`;
-}
-
-// HOT: he asked for something, opened the model, or went to the calendar and stopped. Short, direct,
-// always the calendar, always a way to propose his own time.
-function hotBody(n, p) {
-  const dr = `Dr. ${p.last_name || ''}`.trim();
-  const t = p.funnel_token || '';
-  const askedForInfo = String(p.hot_reason || '') === 'request_info';
-  if (n === 1) {
-    return askedForInfo
-      ? `${dr},\n\nYou asked for the program overview and it went out that morning. Did it answer what you were after, or raise more questions?\n\nThese are the times I have open:\n\n${link(t, 'book')}\n\nIf none work, propose what does.\n\nBest,`
-      : `${dr},\n\nI sent you the material on the Pennsylvania pharmacy ruling a couple of weeks back. At this point it is a shorter conversation than an email.\n\nThese are the times I have open:\n\n${link(t, 'book')}\n\nIf none of them suit, tell me what does and I'll work around it.\n\nBest,`;
-  }
-  if (n === 2) {
-    return `${dr},\n\nOne thing worth knowing before we speak: nothing changes clinically, and nothing changes for your staff. The pharmacy handles fulfillment, billing and collections.\n\n${link(t, 'book')}\n\nOr tell me a time that works and I'll send an invite.\n\nBest,`;
-  }
-  return `${dr},\n\nI'll leave this with you rather than keep writing.\n\nIf the timing is wrong, say so and I'll come back later in the year. If it's worth a look, the calendar is here:\n\n${link(t, 'book')}${routingAsk(p)}\n\nBest,`;
-}
-
-const WARM_SUBJECT = { 1: 'What stops happening', 2: 'Most start with one office', 3: 'Leaving this with you' };
-const HOT_SUBJECT = { 1: 'Fifteen minutes?', 2: 'What actually changes for the practice', 3: 'Leaving this with you' };
-const WARM_OBJ = { 1: 'risk_reduction', 2: 'meeting', 3: 'breakup' };
-const HOT_OBJ = { 1: 'meeting', 2: 'risk_reduction', 3: 'breakup' };
+// The warm and hot template bodies were retired on 2026-08-06. Everything after a click is
+// written per physician by next-move.mjs, from his actual behaviour.
 
 function touchBody(touch, p, hook) {
   const dr = `Dr. ${p.last_name || ''}`.trim();
@@ -306,64 +264,8 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
   // Warm and hot run their own tracks into the same outbox, so there is one place to approve from.
   // A tier is just a speed: hot moves in days because he asked for something, warm moves in weeks
   // because he only looked. Neither asks Eric to write anything.
-  const tierRun = async (tier) => {
-    const isHot = tier === 'hot';
-    const stage = isHot ? 'Hot' : 'Engaged';
-    const counter = isHot ? 'hot_touch' : 'engaged_touch';
-    const bodyFn = isHot ? hotBody : warmBody;
-    const subjects = isHot ? HOT_SUBJECT : WARM_SUBJECT;
-    const objectives = isHot ? HOT_OBJ : WARM_OBJ;
-    // Hot moves at 0, 3, 7 days. Warm at 3, 10, 24. Jittered by a day so three messages never
-    // land on the same weekday at the same hour, which is the thing that reads as a machine.
-    const gaps = isHot ? [3, 4] : [7, 14];
-    const jitter = () => (Math.random() < 0.5 ? 0 : 1);
-
-    const rows = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_token,email,${counter},engaged_at,hot_since,hot_reason,decision_authority,funnel_next_date,funnel_last_cta&lead_type=eq.funnel&funnel_stage=eq.${stage}&email=not.is.null&suppressed=eq.false&on_hold=eq.false&order=id.asc`);
-    let n = 0;
-    for (const p of rows) {
-      if (queued.has(p.id)) continue;
-      if (suppressed.has((p.email || '').toLowerCase())) continue;
-      const done = p[counter] || 0;
-      if (done >= 3) {
-        await sPatch(`mdrx_providers?id=eq.${p.id}`, {
-          funnel_stage: 'Not Now', next_step: `Recycle after ${tier} track`,
-          recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90),
-        });
-        continue;
-      }
-      // Both tracks wait three days for their first message, for different reasons. Warm, because
-      // writing the same day someone clicked reads as surveillance. Hot, because asking for
-      // information already got him an answer: the brief goes out within seconds of the request,
-      // and following it the next morning with "fifteen minutes?" gives him no time to read the
-      // thing he asked for. Hot is still the faster track, it just does not start on top of the
-      // brief: day 3, then 6, then 10, against warm's 3, 10, 24.
-      const startedOn = String((isHot ? p.hot_since : p.engaged_at) || '').slice(0, 10);
-      const due = done === 0
-        ? (startedOn && addDaysISO(-3) >= startedOn)
-        : (!p.funnel_next_date || p.funnel_next_date <= today());
-      if (!due) continue;
-
-      const step = done + 1;
-      await ensureToken(p);
-      const bodyText = bodyFn(step, p)
-        + `\n${TEXT_SIG}\n\nIf you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
-      await sPost('mdrx_outbox', {
-        provider_id: p.id, touch_no: step, to_email: p.email,
-        subject: subjects[step], body_text: bodyText, body_html: mergeEngaged(step, p, bodyFn),
-        status: 'pending', scheduled_date: today(),
-        objective: objectives[step], template_key: `${tier}_${step}`, channel: 'email',
-      });
-      await sPatch(`mdrx_providers?id=eq.${p.id}`, {
-        [counter]: step,
-        funnel_next_date: addDaysISO(gaps[Math.min(step - 1, gaps.length - 1)] + jitter()),
-        next_step: step === 3 ? `${tier} track finished, recycle if silent` : `${tier} follow-up ${step + 1}`,
-      });
-      queued.add(p.id); n++;
-    }
-    return n;
-  };
-  const hotCount = await tierRun('hot');
-  const engCount = await tierRun('warm');
+  const hotCount = 0;
+  const engCount = 0;
 
   const daysIn = cfg.warmup_started_at ? Math.floor((Date.now() - new Date(cfg.warmup_started_at).getTime()) / 86400000) + 1 : 1;
   console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} cold, ${engCount} warm and ${hotCount} hot for approval. Recycled ${rec.length}.`);
