@@ -7,6 +7,7 @@
 // deliverability unlock). Runs on a schedule via GitHub Actions.
 import Anthropic from '@anthropic-ai/sdk';
 import nodemailer from 'nodemailer';
+import { readFileSync } from 'node:fs';
 
 const { ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -65,7 +66,74 @@ async function decide(ctx) {
   } catch (e) { console.error('decide failed: ' + e.message); return null; }
 }
 
+// ---- Deliver the recommendation into the one approval queue ------------------------------------
+// A recommendation Eric has to go and find is a recommendation he does not action. On the day it
+// comes due, the drafted email is rendered into the same card every other email uses and dropped
+// into mdrx_outbox alongside the cold touches, so there is one screen to review and approve.
+// Nothing sends. The subject follows COPY-RULES: Touch 1's subject unless Eric names another.
+const SUBJECT = 'PA Court Opens Up Significant Revenue Opportunity for Physicians';
+const ENGAGED_HTML = readFileSync(new URL('./email-templates/engaged.html', import.meta.url), 'utf8');
+const SIGNATURE_HTML = readFileSync(new URL('./email-templates/signature.html', import.meta.url), 'utf8');
+const SITE = 'https://mdconcierge.net';
+const escHtml = (s) => String(s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const PSTYLE = 'style="font-size:14px;line-height:1.6;color:#33404f;margin:0 0 14px;"';
+
+function draftToCard(draft, p) {
+  const NL = String.fromCharCode(10);
+  const body = String(draft || '').trim().replace(/(\r?\n)+Best,?\s*$/, '');
+  const paras = body.split(NL + NL).map((par) => {
+    const line = par.trim();
+    if (/^https?:\/\/\S+$/.test(line)) {
+      return '<p style="margin:22px 0;"><a href="' + line + '" style="background:#08214C;color:#ffffff;'
+        + 'text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:9px;'
+        + 'display:inline-block;">See my calendar</a></p>';
+    }
+    return '<p ' + PSTYLE + '>' + escHtml(line)
+      .replace(new RegExp('(https?://\\S+)', 'g'), '<a href="$1" style="color:#2F5EA8;">$1</a>')
+      .split(NL).join('<br>') + '</p>';
+  }).join(NL + '        ');
+  const tok = p.funnel_token || '';
+  return ENGAGED_HTML
+    .split('{{body}}').join(paras)
+    .split('{{signature}}').join(SIGNATURE_HTML)
+    .split('{{last}}').join(p.last_name || '')
+    .split('{{token}}').join(tok)
+    .split('{{optout}}').join('If you aren\'t interested, or don\'t wish to hear from me anymore, <a href="'
+      + SITE + '/unsubscribe.html?p=' + tok + '" style="color:#9aa3af;">click here</a> and I won\'t write again.');
+}
+
+async function promoteDueMoves() {
+  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,draft&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
+  if (!due || !due.length) return 0;
+  // One pending email per physician. Two in the queue for the same doctor is how he gets two.
+  const open = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
+  const already = new Set((open || []).map((x) => x.provider_id));
+  let n = 0;
+  for (const mv of due) {
+    if (String(mv.channel || 'email') !== 'email') continue;   // calls stay recommendations
+    if (already.has(mv.provider_id)) continue;
+    const [p] = await sGet(`mdrx_providers?select=id,last_name,email,funnel_token,suppressed&id=eq.${mv.provider_id}`);
+    if (!p || !p.email || p.suppressed) continue;
+    const text = String(mv.draft || '').trim();
+    if (!text) continue;
+    await sPost('mdrx_outbox', {
+      provider_id: p.id, touch_no: 0, to_email: p.email, subject: SUBJECT,
+      body_text: text, body_html: draftToCard(text, p),
+      status: 'pending', scheduled_date: today,
+      objective: mv.angle || null, template_key: 'next_move', channel: 'email',
+    });
+    await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, { status: 'queued', resolved_at: new Date().toISOString() });
+    already.add(p.id);
+    n++;
+  }
+  return n;
+}
+
 async function main() {
+  // Anything already recommended and now due goes into the approval queue first.
+  const promoted = await promoteDueMoves();
+  if (promoted) console.log(`next-move: promoted ${promoted} due recommendation(s) into the approval queue.`);
+
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
   const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
