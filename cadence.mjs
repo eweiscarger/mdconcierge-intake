@@ -157,7 +157,9 @@ function warmBody(n, p) {
     // One who came in through the program overview knows what it is and wants to know it is safe.
     return legal
       ? `${dr},\n\nThe part that surprises most physicians is how much stops happening.\n\nYour patients get their medication delivered to their door rather than chasing a counter that may not stock it. Your staff stop fighting carriers over denials and prior authorizations. And the revenue those prescriptions already generate comes back to the practice.\n\n${link(t, 'program')}\n\nBest,`
-      : `${dr},\n\nThe fair question about an arrangement like this is what it exposes you to.\n\nThe ruling is narrow, and that works in your favor. Workers' compensation prescriptions only. Imaging, therapy and diagnostic imaging stay exactly where they were.\n\n${link(t, 'gosfield')}\n\nBest,`;
+      // He read the overview, so he knows what it is. What he needs next is what happens now.
+      // Same three steps as Touch 3 and the overview page, word for word.
+      : `${dr},\n\nYou have seen how the program works. Here is how it usually goes from here.\n\n1. A call. We walk through the program and the formulary and answer your questions.\n\n2. You evaluate. We send the agreements for review, plus a tool where you enter your own medications and see how it looks for your practice.\n\n3. You decide. If you move forward, the agreements go out for signature, we run a short in-service with your staff, and you are set.\n\n${link(t, 'book')}\n\nOr tell me a time that suits you and I'll work around it.\n\nBest,`;
   }
   if (n === 2) {
     return `${dr},\n\nHundreds of physicians are participating, ${peerPhrase(p.specialty)} among them. Most start with one office or a handful of providers and evaluate from there.\n\nThese are the times I have open:\n\n${link(t, 'book')}\n\nIf none of them suit, tell me what does.\n\nBest,`;
