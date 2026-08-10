@@ -10,6 +10,7 @@ const DRY = process.env.DRY === '1';
 if (!PASS) { console.error('set ERIC_PASS'); process.exit(1); }
 
 const AUTOMATION_FOLDER = 'Automation';   // where cadence sends go to live
+const ENGINE_FOLDER = 'Engine';           // where the machine's own notices go, out of the inbox
 
 // ---- INBOX rules ----
 const ENGINE = /MDconcierge engine|engine RECOVERED|engine may be DOWN|issue\(s\) this run|daily health check|FATAL error/i;
@@ -21,8 +22,11 @@ const TESTJUNK = /^(h|d|vv|test)$|Signature preview|CRM . send test|LIVETEST/i;
 const DMARC = /dmarc/i;
 const CAL = /zohocalendar/i;
 
-function routeInbox(from, subject) {
-  if (ENGINE.test(subject)) return { folder: 'Trash', why: 'engine notification' };
+function routeInbox(from, subject, headerBlob) {
+  // Authoritative: every operational agent stamps X-MDC-Bot. Sales notices are NOT stamped and
+  // stay in the inbox, because a booking or a hand-raise is exactly what Eric wants to see.
+  if (/x-mdc-bot/i.test(headerBlob || '')) return { folder: ENGINE_FOLDER, why: 'engine notice' };
+  if (ENGINE.test(subject)) return { folder: ENGINE_FOLDER, why: 'engine notice, by subject' };
   if (TESTJUNK.test(subject.trim())) return { folder: 'Trash', why: 'test email' };
   if (DMARC.test(from) || DMARC.test(subject)) return { folder: 'Archive', why: 'DMARC report' };
   if (CAL.test(from)) return { folder: 'Notification', why: 'calendar notice' };
@@ -67,14 +71,16 @@ if (!connected) { console.log('mailbox busy, skipping this run.'); process.exit(
 
 // ---------- INBOX ----------
 {
+  await ensureFolder(client, ENGINE_FOLDER);
   const lock = await client.getMailboxLock('INBOX');
-  const plan = { Trash: [], Archive: [], Notification: [] };
+  const plan = { Trash: [], Archive: [], Notification: [], [ENGINE_FOLDER]: [] };
   const why = {}; let scanned = 0, kept = 0;
   try {
-    for await (const m of client.fetch('1:*', { envelope: true })) {
+    for await (const m of client.fetch('1:*', { envelope: true, headers: ['x-mdc-bot'] })) {
       scanned++;
       const env = m.envelope || {};
-      const r = routeInbox((env.from?.[0]?.address || '').toLowerCase(), env.subject || '');
+      const hdr = m.headers ? m.headers.toString() : '';
+      const r = routeInbox((env.from?.[0]?.address || '').toLowerCase(), env.subject || '', hdr);
       if (!r) { kept++; continue; }
       plan[r.folder].push(m.uid); why[r.why] = (why[r.why] || 0) + 1;
     }

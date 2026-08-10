@@ -61,7 +61,7 @@ async function main() {
 
   if (!ERIC_PASS) { console.log(`overdue-escalation: would alert on ${rows.length} lead(s) but no mail password is set.`); return; }
   const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
-  await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: manager, subject: `[MDconcierge] ${rows.length} lead(s) past due by ${DAYS_LATE}+ days`, html, headers: { 'X-MDC-Auto': 'escalation' } });
+  await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: manager, subject: `[MDconcierge] ${rows.length} lead(s) past due by ${DAYS_LATE}+ days`, html, headers: { 'X-MDC-Auto': 'escalation' } });
 
   const now = new Date().toISOString();
   for (const r of rows) await sPatch(`mdrx_providers?id=eq.${r.id}`, { escalated_at: now });

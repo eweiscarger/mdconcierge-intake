@@ -30,7 +30,7 @@ const mailer = () => nodemailer.createTransport({
 });
 
 async function notify(subject, html) {
-  await mailer().sendMail({ from: `"MDconcierge" <${ERIC}>`, to: ERIC, subject, html, headers: { 'X-MDC-Auto': 'reminder' } });
+  await mailer().sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC}>`, to: ERIC, subject, html, headers: { 'X-MDC-Auto': 'reminder' } });
 }
 
 // What Eric actually needs in front of him before he dials: who, where they work, and what they

@@ -35,7 +35,7 @@ async function main() {
     checks.map((c) => `${c.ok ? 'OK  ' : 'FAIL'}  ${c.name}: ${c.detail}`).join('\n') +
     (dkimDrift ? `\n\nNote: the DKIM key changed from what we set. If you did not rotate it on purpose, verify it in Zoho.` : '') +
     `\n\nBroken or drifted records can push your mail to spam. Fix the failing record in Namecheap DNS (Advanced DNS > Host Records).`;
-  await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: `[MDconcierge] email auth check: ${(broken.map((b) => b.name).concat(dkimDrift ? ['DKIM key changed'] : [])).join(', ')}`, text: body });
+  await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: `[MDconcierge] email auth check: ${(broken.map((b) => b.name).concat(dkimDrift ? ['DKIM key changed'] : [])).join(', ')}`, text: body });
   console.log('alerted Eric');
 }
 

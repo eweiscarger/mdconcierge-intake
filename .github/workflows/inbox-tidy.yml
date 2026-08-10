@@ -12,7 +12,7 @@ on:
         required: false
         default: ''
   schedule:
-    - cron: '25 */6 * * *'   # every 6 hours
+    - cron: '*/15 * * * *'   # every 15 minutes, so the inbox never accumulates engine mail
 
 concurrency:
   group: inbox-tidy
