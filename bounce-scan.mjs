@@ -51,7 +51,7 @@ function classifyBounce(blob) {
 async function alertEric(subject, text) {
   try {
     const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
-    await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject, text });
+    await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject, text });
   } catch (e) { console.error('alert failed: ' + e.message); }
 }
 

@@ -16,7 +16,7 @@ async function lastId(action) { try { return ((await get(`audit_log?select=id&ac
 async function email(subject, body) {
   if (!ZOHO_USER || !ZOHO_APP_PASSWORD) { console.log('(no Zoho creds — would have emailed: ' + subject + ')'); return; }
   const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD } });
-  await t.sendMail({ from: `MDconcierge Watchdog <${ZOHO_USER}>`, to: ADMIN_EMAIL, subject, text: body });
+  await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `MDconcierge Watchdog <${ZOHO_USER}>`, to: ADMIN_EMAIL, subject, text: body });
 }
 
 const row = (await get('system_health?select=*&id=eq.1'))[0];

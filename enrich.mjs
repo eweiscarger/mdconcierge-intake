@@ -68,7 +68,7 @@ main().catch(async (e) => {
   console.error('enrich fatal: ' + (e?.stack || e));
   try {
     const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
-    await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] enrich agent error', text: msg });
+    await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] enrich agent error', text: msg });
   } catch (_e) {}
   process.exit(0);
 });
