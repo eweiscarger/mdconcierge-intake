@@ -86,7 +86,7 @@ Return ONLY: {"sentiment":"...","hot":true|false,"draft":"..."}`;
 
 async function main() {
   // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
-  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type');
+  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type,cell,office_phone');
   const existing = await sGet('mdrx_inbox_drafts?select=message_uid');
   const seen = new Set((existing || []).map(d => d.message_uid));
   const supp = await sGet('suppressions?select=email');
@@ -121,6 +121,50 @@ async function main() {
       // Classify + draft (cap the model spend per run).
       const a = created < 10 ? await analyzeAndDraft(who, fromAddr, subject, bodyText, isTeam)
                              : { sentiment: 'workable', hot: false, draft: '' };
+
+      // ---- Better ways to reach him -------------------------------------------------------
+      // Every touch now asks: if phone or text is easier, send your cell or a personal email.
+      // The answers arrive in ordinary replies and in out-of-office autoresponders, which is
+      // where Joy Long's new address sat for four days before anyone went looking. Anything
+      // found goes on the record, so it is never buried in a draft queue.
+      if (prov && bodyText) {
+        const found = {};
+        // A US number, however he writes it. Ignore anything that is already on his record.
+        const phones = (bodyText.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g) || [])
+          .map((s) => s.replace(/\D/g, '').replace(/^1/, ''))
+          .filter((d) => d.length === 10);
+        const known = new Set([prov.cell, prov.office_phone].map((v) => String(v || '').replace(/\D/g, '').replace(/^1/, '')));
+        const newPhone = phones.find((d) => !known.has(d));
+        if (newPhone && /cell|mobile|text|call me|reach me|my number/i.test(bodyText)) {
+          found.cell = newPhone.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+        }
+        // An address that is not the one he wrote from and not ours.
+        const addrs = (bodyText.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
+          .map((a) => a.toLowerCase())
+          .filter((a) => a !== fromAddr && !a.endsWith('mdconcierge.net') && !a.endsWith('mdrx360.com')
+                      && !/noreply|no-reply|postmaster|mailer-daemon/.test(a));
+        const altEmail = addrs[0];
+        if (altEmail && /new (e-?mail|address)|personal|please use|reach me at|contact me at|better/i.test(bodyText)) {
+          found.alt_email = altEmail;
+        }
+        if (found.cell || found.alt_email) {
+          const bits = [];
+          if (found.cell) { bits.push(`cell ${found.cell}`); }
+          if (found.alt_email) { bits.push(`email ${found.alt_email}`); }
+          await sPatch(`mdrx_providers?id=eq.${prov.id}`, {
+            ...(found.cell ? { cell: found.cell } : {}),
+            needs_attention: true,
+            next_step: `He gave a better way to reach him: ${bits.join(', ')}. Use it.`,
+          });
+          await sPost('mdrx_activity', {
+            provider_id: prov.id, type: 'note', occurred_at: new Date().toISOString(),
+            subject: 'Gave a better way to reach him',
+            notes: `${bits.join('\n')}\n\nFrom his reply: "${bodyText.slice(0, 400)}"`,
+            created_by: 'inbox agent',
+          });
+          console.log(`  ${who}: captured ${bits.join(' and ')}`);
+        }
+      }
 
       // ---- Automatic home routing (prospects only; teammates are never routed) ----
       let routedAction = 'none';
