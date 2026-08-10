@@ -13,7 +13,14 @@ const AUTOMATION_FOLDER = 'Automation';   // where cadence sends go to live
 const ENGINE_FOLDER = 'Engine';           // where the machine's own notices go, out of the inbox
 
 // ---- INBOX rules ----
-const ENGINE = /MDconcierge engine|engine RECOVERED|engine may be DOWN|issue\(s\) this run|daily health check|FATAL error/i;
+// Written against what was actually sitting in the inbox on 2026-08-10 rather than guesses.
+// Everything here is the machine talking to itself.
+const ENGINE = /MDconcierge engine|engine RECOVERED|engine may be DOWN|issue\(s\) this run|daily health check|FATAL error|^\[MDconcierge\]|^Outreach sent:|fresh content ideas to review|DRY PREVIEW|^\[PREVIEW\]|^\[TEST\]/i;
+// GitHub telling him a cron ran is the same category of noise.
+const CI = /notifications@github\.com|noreply@github\.com/i;
+// Deliberately NOT filed, because these are the reasons the inbox exists: "Hot lead: X just
+// engaged", booking confirmations, hand-raises, dispensing analyses, referral chases, and
+// anything a human sent.
 const TESTJUNK = /^(h|d|vv|test)$|Signature preview|CRM . send test|LIVETEST/i;
 // NOTE: bounce notices are deliberately NOT handled here. bounce-scan reads them, classifies
 // the failure, suppresses or queues a retry, and trashes them itself once logged. This job used
@@ -27,6 +34,7 @@ function routeInbox(from, subject, headerBlob) {
   // stay in the inbox, because a booking or a hand-raise is exactly what Eric wants to see.
   if (/x-mdc-bot/i.test(headerBlob || '')) return { folder: ENGINE_FOLDER, why: 'engine notice' };
   if (ENGINE.test(subject)) return { folder: ENGINE_FOLDER, why: 'engine notice, by subject' };
+  if (CI.test(from)) return { folder: ENGINE_FOLDER, why: 'GitHub Actions notice' };
   if (TESTJUNK.test(subject.trim())) return { folder: 'Trash', why: 'test email' };
   if (DMARC.test(from) || DMARC.test(subject)) return { folder: 'Archive', why: 'DMARC report' };
   if (CAL.test(from)) return { folder: 'Notification', why: 'calendar notice' };
