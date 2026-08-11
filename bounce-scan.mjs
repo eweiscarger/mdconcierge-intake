@@ -2,7 +2,9 @@
 // Reads eric@ (read-only) for bounce notifications and spam complaints. Hard bounces
 // and complaints are auto-suppressed silently (never emailed again). If the hard-bounce
 // rate over the last 7 days crosses 5% (with enough volume), or any spam complaint
-// lands, it AUTO-PAUSES sending (outreach_config.sending_paused) and alerts Eric.
+// lands, it suppresses the address and pulls the lead out. It does NOT pause sending: a wrong
+// address for one physician must never stop the campaign for everyone else. Only a spam
+// complaint pauses, because that threatens the domain rather than one record.
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
@@ -121,6 +123,9 @@ async function main() {
                 needs_attention: true, email_confidence: 'X_bounced',
                 next_step: 'Address bounced. Find a current one, then it re-enters the cadence' };
           await sPatch(`mdrx_providers?id=eq.${emailToId[e]}`, patch);
+          // Anything already waiting for this address is aimed at a mailbox that does not exist.
+          // Cancel it here, or it sits in the queue looking sendable and bounces again on approval.
+          await sPatch(`mdrx_outbox?provider_id=eq.${emailToId[e]}&status=in.(pending,held)`, { status: 'skipped' });
         }
         // Only chase a DEAD mailbox. A deliberate block is their decision, and we honour it.
         if (cause === 'dead' && emailToId[e]) relocate.push(emailToId[e]);
@@ -221,9 +226,20 @@ async function main() {
   // the threshold once can never clear it and is re-paused every three hours forever. While a
   // snooze is live the watchdog still watches and still alerts, it simply does not overrule Eric.
   const snoozed = cfg.pause_snooze_until && new Date(cfg.pause_snooze_until) > new Date();
-  if (paused && !cfg.sending_paused && !snoozed) {
+  // A bad address is a bad address. It gets suppressed, above, and the physicians behind every
+  // other address are not punished for it. Eric works the queue from his phone and cannot lift a
+  // global pause from there, so a wrong address for one doctor used to stop the whole operation
+  // until he was back at a desk. Bounces now remove the lead and raise an alarm; they never
+  // switch sending off.
+  //
+  // The one exception is a spam complaint. That is a person reporting us, not a dead mailbox, and
+  // it threatens the domain rather than one record, so it still stops everything.
+  const complaintOnly = complaints.length > 0;
+  if (complaintOnly && !cfg.sending_paused && !snoozed) {
     await sPatch('outreach_config?id=eq.1', { sending_paused: true, pause_reason: reason });
-    await alertEric('[MDconcierge] outreach AUTO-PAUSED', `Sending was auto-paused to protect your deliverability.\n\nReason: ${reason}\n\nHard bounces and complaints have been suppressed automatically. Review, then un-pause from the Cockpit when ready.`);
+    await alertEric('[MDconcierge] outreach PAUSED, spam complaint', `Sending is paused because someone reported the mail as spam, which puts the domain at risk.\n\nReason: ${reason}\n\nThat address is suppressed. Resume from the Cockpit once you are happy.`);
+  } else if (paused && !complaintOnly) {
+    await alertEric('[MDconcierge] bounce rate high, sending left ON', `Bounce rate is ${reason}.\n\nThe bounced addresses are suppressed and their leads pulled out. Sending has NOT been paused: the fix is address quality, not stopping the campaign.\n\nWorth checking which practices those addresses belong to.`);
   } else if (paused && snoozed) {
     await alertEric('[MDconcierge] deliverability still poor, not re-pausing', `You resumed sending, so this is a warning rather than a pause.
 
