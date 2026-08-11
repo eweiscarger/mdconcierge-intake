@@ -33,11 +33,15 @@ Timing logic (today is ${today}):
 - Just engaged / opened the tool / clicked in the last day or two: move fast, 1-2 days out.
 - Opened but went quiet: 3-5 days out, gentle nudge or a new angle.
 - Booked a meeting: pre-call nurture a day or two before.
-- Sent the Executive Brief (brief_sent_at is set) but has NOT requested a meeting (meeting_requested_at is null) after about 3 or more days: a short, warm nudge that re-offers the 15-minute call and points back to the brief. Do not resend the brief, just prompt the next step.
+- Sent the Executive Brief (brief_sent_at is set) but has NOT requested a meeting (meeting_requested_at is null) after 2 days: follow up. The brief email promised "I will follow up in a day or two", so this is keeping a promise, not chasing. Short, warm, do not resend the brief. Two physicians asked for the brief and then heard nothing for a week, which is the failure this rule exists to prevent.
 - Cold for a while: longer gap and a genuinely different angle, do not repeat the last touch.
 Pick a real date on or after ${today}.
 
-SCHEDULING (email and text drafts): asking a physician to send times, with no way to just book, is a run-around. Whenever the move involves talking, give BOTH options in the same breath: invite them to reply with times that suit them AND paste the lead's booking_link from the context so they can drop straight onto Eric's calendar. Never ask for times without including that link. If booking_link is null, ask for times only. Phrase it as an either/or, for example: "Reply with a few times that suit you and I'll work around your schedule, or grab a slot directly here: <booking_link>".
+CHANNEL: email, unless the lead's record actually holds a cell number. Eric cannot call a physician he has no number for, and the office line reaches a receptionist. Never recommend "call him" for a lead whose only number is the practice switchboard.
+
+SCHEDULING (email and text drafts): the calendar has produced zero bookings from over a hundred emails, so it is the alternative, never the ask. Whenever the move involves talking, lead with the lead's talk_link, which is a short form where he gives a better email, a cell, how he prefers to be contacted and when. Offer booking_link second, as "or pick a time on my calendar". Never ask him to reply with times as the only route. If talk_link is null, ask for a better number and time in the body.
+
+COPY RULES, absolute: no em dashes or en dashes anywhere. American spelling. Never reveal that opens, clicks or reading are tracked: no "I saw you", no "you had a chance to look", no reference to anything he read or clicked. Never mention in-office dispensing. Never offer to estimate his opportunity from his own volume. Never invent a number, a name or a legal conclusion.
 
 ADDRESSING: The lead is a physician. ALWAYS address them as "Dr. [last name]" in the greeting (e.g., "Hi Dr. Rao,"), NEVER by first name. Only office staff, practice managers, and champions are addressed by first name, and those are not the lead here.
 
@@ -135,7 +139,7 @@ async function main() {
   if (promoted) console.log(`next-move: promoted ${promoted} due recommendation(s) into the approval queue.`);
 
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
@@ -162,6 +166,8 @@ async function main() {
       engaged_at: p.engaged_at, has_email: !!p.email,
       // Eric's tracked booking link for THIS lead. Any draft that offers a call must carry it.
       booking_link: p.funnel_token ? `https://mdconcierge.net/go.html?p=${p.funnel_token}&to=book` : null,
+      talk_link: p.funnel_token ? `https://mdconcierge.net/go.html?p=${p.funnel_token}&to=talk` : null,
+      has_cell: !!(p.cell && String(p.cell).trim()),
       brief_sent_at: p.brief_sent_at, meeting_requested_at: p.meeting_requested_at,
       engagement_events: (events || []).map((e) => ({ event: e.event, page: e.page, link: e.link, cta: e.cta, when: e.created_at })),
       their_replies: (replies || []).map((r) => ({ said: r.snippet, sentiment: r.sentiment, when: r.received_at })),
