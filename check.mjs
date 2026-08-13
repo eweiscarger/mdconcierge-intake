@@ -33,8 +33,39 @@ const visibleText = (html) => String(html || '')
   .trim();
 
 /**
+ * What a link calls itself. Every renderer imports this one, because the labels drifted: the
+ * sender learned the names of the talk and jortho destinations while the two queue builders kept
+ * their own shorter lists and fell back to "See the details" for anything else. A destination with
+ * no name here fails the gate below instead of shipping a button that tells the physician nothing.
+ * @param {string} url
+ */
+export function linkLabel(url) {
+  // The renderers escape the body before they linkify it, so the destination arrives as
+  // "&amp;to=book" and a matcher looking for "&to=" reads it as having no destination at all.
+  const u = String(url || '').replace(/&amp;/gi, '&');
+  const to = (u.match(/[?&]to=([a-z_]+)/i) || ['', ''])[1].toLowerCase();
+  if (/unsubscribe/i.test(u)) return 'click here';
+  if (to === 'book' || /calendar|meeting/i.test(u)) return 'See my calendar';
+  if (to === 'model' || /pharmacy-model/i.test(u)) return 'Open the model';
+  if (to === 'talk') return 'Have someone reach out';
+  if (to === 'jortho') return 'Read the study';
+  // Wording lifted from touch1.html, where these three already carry approved anchor text. The
+  // fallback renderer knew none of them, so an edited email would have printed the raw URL.
+  if (to === 'decision') return "Pennsylvania Supreme Court decision (700 Pharmacy)";
+  if (to === 'siegel') return "Daniel Siegel's practical analysis for Pennsylvania physicians";
+  if (to === 'gosfield') return "Alice Gosfield's legal analysis";
+  if (to === 'execbrief') return 'Read the brief';
+  if (to === 'program' || to === 'brief' || to === 'overview') return 'Read the one page overview';
+  return to ? 'UNKNOWN LINK: ' + to : 'Read the one page overview';
+}
+
+/** The opt-out sentence, in the plain-text half. Same wording the designed half carries. */
+export const optOutLine = (stopUrl) =>
+  `If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${stopUrl}`;
+
+/**
  * Every reason this email must not go out. Empty array means it may.
- * @param {{html?:string, text?:string, lastName?:string, toEmail?:string}} m
+ * @param {{html?:string, text?:string, lastName?:string, toEmail?:string, stage?:string}} m
  */
 export function emailFaults(m) {
   const html = String(m.html || '');
@@ -50,9 +81,13 @@ export function emailFaults(m) {
   const last = String(m.lastName || '').trim();
   if (!last) f.push('no surname on the record');
   else {
-    const want = `Dr. ${last},`;
-    if (text.trim() && !text.trim().startsWith(want)) f.push('plain text does not open on the greeting');
-    if (html.trim() && !vis.startsWith(want)) f.push('designed email does not open on the greeting');
+    // "Hi Dr. Dempsey," is a greeting. The rule was written against the cold templates, which open
+    // on a bare surname, and it held six correctly addressed follow-ups for saying hello first.
+    // What matters is that he is named as a physician before anything else, not the exact opener.
+    const want = new RegExp('^(?:(?:hi|hello|dear|good (?:morning|afternoon|evening))[,]?\\s+)?Dr\\. '
+      + last.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ',', 'i');
+    if (text.trim() && !want.test(text.trim())) f.push('plain text does not open on the greeting');
+    if (html.trim() && !want.test(vis)) f.push('designed email does not open on the greeting');
   }
 
   // The opt-out has to exist in both halves, and must never be the first thing he reads. It once
@@ -80,6 +115,14 @@ export function emailFaults(m) {
   // Tracking that cannot work is worse than none: the click is dropped and the lead never moves.
   if (BLIND_TOKEN.test(html + text)) f.push('tracking token is empty');
   if (URL_AS_TEXT.test(html)) f.push('a link shows a raw URL as its text');
+
+  // A lead who is already in conversation does not get asked to book a first call or to fill in a
+  // form saying how to reach him. His practice manager has been on a Zoom with us. Sending him the
+  // opening move again reads as though nobody here remembers who he is.
+  if (/^(engaged|closing|won)$/i.test(String(m.stage || '').trim())
+      && /[?&](?:amp;)?to=(book|talk)\b/i.test(html + text)) {
+    f.push('offers a first call or a reach-me form to a lead who is past that');
+  }
 
   // A button has to say where it goes. "See the details" was the fallback label for any destination
   // the renderer had no name for, so physicians got a button that told them nothing.

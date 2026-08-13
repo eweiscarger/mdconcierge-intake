@@ -8,6 +8,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import nodemailer from 'nodemailer';
 import { readFileSync } from 'node:fs';
+import { emailFaults, linkLabel, optOutLine } from './check.mjs';
 
 const { ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -39,7 +40,11 @@ Pick a real date on or after ${today}.
 
 CHANNEL: email, unless the lead's record actually holds a cell number. Eric cannot call a physician he has no number for, and the office line reaches a receptionist. Never recommend "call him" for a lead whose only number is the practice switchboard.
 
-SCHEDULING (email and text drafts): the calendar has produced zero bookings from over a hundred emails, so it is the alternative, never the ask. Whenever the move involves talking, lead with the lead's talk_link, which is a short form where he gives a better email, a cell, how he prefers to be contacted and when. Offer booking_link second, as "or pick a time on my calendar". Never ask him to reply with times as the only route. If talk_link is null, ask for a better number and time in the body.
+SCHEDULING, for leads who have NOT yet started a conversation: the calendar has produced zero bookings from over a hundred emails, so it is the alternative, never the ask. Whenever the move involves talking, lead with the lead's talk_link, which is a short form where he gives a better email, a cell, how he prefers to be contacted and when. Offer booking_link second, as "or pick a time on my calendar". Never ask him to reply with times as the only route. If talk_link is null, ask for a better number and time in the body.
+
+STAGE, absolute. If stage is Engaged or Closing, this lead is already in conversation with us, or his practice is. Use NEITHER talk_link NOR booking_link. Asking a man whose practice manager has been on a call with us to fill in a form saying how to reach him, or to book a first call, throws the relationship away and reads as though nobody here remembers who he is. For those leads the move is the next real step: answer what was actually asked, send what was actually requested, confirm what was already discussed. If you truly need time with him, propose it in the body against what was last discussed, with no link.
+
+THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
 COPY RULES, absolute: no em dashes or en dashes anywhere. American spelling. Never reveal that opens, clicks or reading are tracked: no "I saw you", no "you had a chance to look", no reference to anything he read or clicked. Never mention in-office dispensing. Never offer to estimate his opportunity from his own volume. Never invent a number, a name or a legal conclusion.
 
@@ -88,12 +93,13 @@ function draftToCard(draft, p) {
   const paras = body.split(NL + NL).map((par) => {
     const line = par.trim();
     if (/^https?:\/\/\S+$/.test(line)) {
+      // Every such button said "See my calendar", including the ones that went to the talk form.
       return '<p style="margin:22px 0;"><a href="' + line + '" style="background:#08214C;color:#ffffff;'
         + 'text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:9px;'
-        + 'display:inline-block;">See my calendar</a></p>';
+        + 'display:inline-block;">' + linkLabel(line) + '</a></p>';
     }
     return '<p ' + PSTYLE + '>' + escHtml(line)
-      .replace(new RegExp('(https?://\\S+)', 'g'), '<a href="$1" style="color:#2F5EA8;">$1</a>')
+      .replace(new RegExp('(https?://\\S+)', 'g'), (u) => '<a href="' + u + '" style="color:#2F5EA8;font-weight:600;">' + linkLabel(u) + '</a>')
       .split(NL).join('<br>') + '</p>';
   }).join(NL + '        ');
   const tok = p.funnel_token || '';
@@ -107,7 +113,7 @@ function draftToCard(draft, p) {
 }
 
 async function promoteDueMoves() {
-  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,draft&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
+  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
   if (!due || !due.length) return 0;
   // One pending email per physician. Two in the queue for the same doctor is how he gets two.
   const open = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
@@ -116,13 +122,32 @@ async function promoteDueMoves() {
   for (const mv of due) {
     if (String(mv.channel || 'email') !== 'email') continue;   // calls stay recommendations
     if (already.has(mv.provider_id)) continue;
-    const [p] = await sGet(`mdrx_providers?select=id,last_name,email,funnel_token,suppressed&id=eq.${mv.provider_id}`);
-    if (!p || !p.email || p.suppressed) continue;
-    const text = String(mv.draft || '').trim();
-    if (!text) continue;
+    const [p] = await sGet(`mdrx_providers?select=id,last_name,email,funnel_token,funnel_stage,suppressed,on_hold&id=eq.${mv.provider_id}`);
+    // A recommendation made last week must not go out to a lead Eric has since pulled off
+    // automation. The hold is checked at the moment of queueing, not only at the moment of drafting.
+    if (!p || !p.email || p.suppressed || p.on_hold) continue;
+    const draft = String(mv.draft || '').trim();
+    if (!draft) continue;
+    // The card injected the opt-out and the plain text did not, so every drafted follow-up failed
+    // the gate on arrival and sat in the queue as held. Both halves carry it, same wording.
+    const text = draft + '\n\n' + optOutLine(`${SITE}/unsubscribe.html?p=${p.funnel_token || ''}`);
+    const html = draftToCard(draft, p);
+    // A draft is written by a model, so it is exactly the thing that has to be checked before it
+    // reaches Eric's queue. The recommendation stays pending and says why, rather than queueing
+    // something he then has to notice is wrong.
+    const faults = emailFaults({ html, text, lastName: p.last_name, toEmail: p.email, stage: p.funnel_stage });
+    if (faults.length) {
+      console.error(`next-move: refused to queue move ${mv.id} for ${p.email}: ${faults.join(', ')}`);
+      await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, {
+        status: 'refused',
+        reason: [mv.reason, 'refused: ' + faults.join(', ')].filter(Boolean).join(' | '),
+        resolved_at: new Date().toISOString(),
+      });
+      continue;
+    }
     await sPost('mdrx_outbox', {
       provider_id: p.id, touch_no: 0, to_email: p.email, subject: SUBJECT,
-      body_text: text, body_html: draftToCard(text, p),
+      body_text: text, body_html: html,
       status: 'pending', scheduled_date: today,
       objective: mv.angle || null, template_key: 'next_move', channel: 'email',
     });
@@ -133,13 +158,29 @@ async function promoteDueMoves() {
   return n;
 }
 
+// A physician's practice answers on his behalf. Nine replies from the Hatgis practice, his manager
+// and his PA, were on file and none of them were attached to his record, so the agent read him as
+// silent and drafted a first-contact nudge to a lead who was mid-conversation. A reply from the
+// practice domain is a reply from the lead. Free mail cannot be matched this way, several leads
+// share gmail.com, and our own domains are us talking to ourselves.
+const FREE_MAIL = new Set(['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com', 'me.com', 'live.com', 'msn.com', 'comcast.net', 'verizon.net']);
+const OUR_DOMAINS = new Set(['mdconcierge.net', 'mdrx360.com']);
+function practiceDomain(email) {
+  const d = String(email || '').split('@')[1];
+  if (!d) return null;
+  const dom = d.toLowerCase().trim();
+  return (FREE_MAIL.has(dom) || OUR_DOMAINS.has(dom)) ? null : dom;
+}
+
 async function main() {
   // Anything already recommended and now due goes into the approval queue first.
   const promoted = await promoteDueMoves();
   if (promoted) console.log(`next-move: promoted ${promoted} due recommendation(s) into the approval queue.`);
 
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)`);
+  // on_hold means Eric took this lead off automation by hand. It was not checked here, so a lead
+  // he had already pulled out kept getting drafted for, three times in a week.
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
@@ -154,7 +195,13 @@ async function main() {
   for (const p of candidates) {
     const [events, replies, quotes, acts] = await Promise.all([
       sGet(`mdrx_funnel_events?select=event,page,link,cta,scroll,seconds,created_at&provider_id=eq.${p.id}&order=created_at.desc&limit=15`),
-      sGet(`mdrx_inbox_drafts?select=subject,snippet,sentiment,received_at&provider_id=eq.${p.id}&order=received_at.desc&limit=5`),
+      (() => {
+        const dom = practiceDomain(p.email);
+        const cols = 'select=from_addr,from_name,subject,snippet,sentiment,received_at';
+        return sGet(dom
+          ? `mdrx_inbox_drafts?${cols}&or=(provider_id.eq.${p.id},from_addr.ilike.*@${dom})&order=received_at.desc&limit=8`
+          : `mdrx_inbox_drafts?${cols}&provider_id=eq.${p.id}&order=received_at.desc&limit=5`);
+      })(),
       sGet(`quote_links?select=view_count,first_viewed_at,last_viewed_at&provider_id=eq.${p.id}`),
       sGet(`mdrx_activity?select=type,subject,notes,occurred_at&provider_id=eq.${p.id}&order=occurred_at.desc&limit=5`),
     ]);
@@ -170,10 +217,27 @@ async function main() {
       has_cell: !!(p.cell && String(p.cell).trim()),
       brief_sent_at: p.brief_sent_at, meeting_requested_at: p.meeting_requested_at,
       engagement_events: (events || []).map((e) => ({ event: e.event, page: e.page, link: e.link, cta: e.cta, when: e.created_at })),
-      their_replies: (replies || []).map((r) => ({ said: r.snippet, sentiment: r.sentiment, when: r.received_at })),
+      // Who said it matters: "Monica, his practice manager" is not the physician, and a draft that
+      // ignores what she already asked for reads as though nobody is listening.
+      their_replies: (replies || []).map((r) => ({ from: r.from_name || r.from_addr, said: r.snippet, subject: r.subject, sentiment: r.sentiment, when: r.received_at })),
       tool_views: (quotes || []).map((q) => ({ views: q.view_count, first: q.first_viewed_at, last: q.last_viewed_at })),
       logged_touches: acts || [],
     };
+    // A lead who has written to us and not been answered does not get an automated follow-up. The
+    // answer is a reply to what he actually said, and that is Eric's to write. Drafting over the
+    // top of it is how a physician gets a generic nudge two days after asking a direct question.
+    const newestReply = (replies || [])[0];
+    const unanswered = newestReply
+      && (!p.last_touch_at || new Date(newestReply.received_at) > new Date(p.last_touch_at));
+    if (unanswered) {
+      console.log(`next-move: ${p.last_name} has an unanswered reply from ${newestReply.from_name || newestReply.from_addr} (${String(newestReply.received_at).slice(0, 10)}). No draft; it needs a real answer.`);
+      await sPatch(`mdrx_providers?id=eq.${p.id}`, {
+        behavior_flag: 'replied, waiting on us',
+        next_step: `answer ${newestReply.from_name || newestReply.from_addr} by hand`,
+      });
+      continue;
+    }
+
     const mv = await decide(ctx);
     if (!mv) continue;
     await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending' });
@@ -229,6 +293,9 @@ async function alertFailure(job, msg) {
   } catch (e) { console.error('alertFailure error: ' + e.message); }
 }
 
+// Importable so the rendering can be checked against a real draft without running the agent.
+export { draftToCard };
+if (process.env.NEXTMOVE_NO_RUN) { /* imported for inspection, do not run */ } else
 main().catch(async (e) => {
   const msg = String(e?.message || e);
   if (/timeout|econnreset|econnrefused|enotfound|socket|network|fetch failed|overloaded|529|503/i.test(msg)) { console.warn('transient, skipping run: ' + msg); process.exit(0); }
