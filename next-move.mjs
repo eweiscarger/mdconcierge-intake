@@ -17,6 +17,8 @@ for (const [k, v] of Object.entries({ ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_
   if (!v) { console.error('Missing env var: ' + k); process.exit(1); }
 }
 const PER_RUN = Number(process.env.NEXTMOVE_PER_RUN || 10);
+// Matches sent-scan.mjs: a lead Eric answered himself is left alone for this long.
+const MANUAL_PAUSE_DAYS = Number(process.env.MANUAL_PAUSE_DAYS || 10);
 const today = new Date().toISOString().slice(0, 10);
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -180,13 +182,25 @@ async function main() {
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
   // on_hold means Eric took this lead off automation by hand. It was not checked here, so a lead
   // he had already pulled out kept getting drafted for, three times in a week.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,manual_touch_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
   // Prioritize: due today/overdue, or flagged for attention, or no next date set. Hottest first.
+  // A lead Eric wrote to by hand is his conversation for the next ten days. behavior_flag is
+  // deliberately not an override here: the flag is exactly what a hot lead carries, so letting it
+  // through would put the machine on top of the very conversations that matter most.
+  const pauseCutoff = new Date(Date.now() - MANUAL_PAUSE_DAYS * 86400000);
   const candidates = (P || [])
     .filter((p) => !pending.has(p.id))
+    .filter((p) => {
+      if (!p.manual_touch_at) return true;
+      if (new Date(p.manual_touch_at) > pauseCutoff) {
+        console.log(`next-move: ${p.last_name} was answered by hand on ${String(p.manual_touch_at).slice(0, 10)}. Leaving him to Eric.`);
+        return false;
+      }
+      return true;
+    })
     .filter((p) => !p.funnel_next_date || p.funnel_next_date <= today || p.behavior_flag)
     .sort((a, b) => (Number(b.funnel_score) || 0) - (Number(a.funnel_score) || 0))
     .slice(0, PER_RUN);

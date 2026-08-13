@@ -1,0 +1,33 @@
+name: Sent folder scan
+# Reads eric@mdconcierge.net Sent (read-only, SENDS NOTHING) so the platform knows what Eric
+# writes by hand, not only what the machine sends. Logs each hand-sent email onto the lead and
+# pauses automation for that lead so nothing lands on top of a live conversation.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '20 * * * *'   # hourly, offset from the inbox scan so they do not collide
+
+concurrency:
+  group: sent-scan
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Log Eric's own sent mail onto the leads it belongs to
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node sent-scan.mjs
