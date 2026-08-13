@@ -65,7 +65,7 @@ export const optOutLine = (stopUrl) =>
 
 /**
  * Every reason this email must not go out. Empty array means it may.
- * @param {{html?:string, text?:string, lastName?:string, toEmail?:string, stage?:string}} m
+ * @param {{html?:string, text?:string, lastName?:string, toEmail?:string, stage?:string, behaviorFlag?:string}} m
  */
 export function emailFaults(m) {
   const html = String(m.html || '');
@@ -119,7 +119,11 @@ export function emailFaults(m) {
   // A lead who is already in conversation does not get asked to book a first call or to fill in a
   // form saying how to reach him. His practice manager has been on a Zoom with us. Sending him the
   // opening move again reads as though nobody here remembers who he is.
-  if (/^(engaged|closing|won)$/i.test(String(m.stage || '').trim())
+  // One exception, and only one: a lead who went to the booking page and did not book. Sending him
+  // back to finish what he started is not the same as asking a man mid-conversation to book a first
+  // call, and the rule without this carve-out silenced exactly the people showing booking intent.
+  const midBooking = /booking_nudge/i.test(String(m.behaviorFlag || ''));
+  if (/^(engaged|closing|won)$/i.test(String(m.stage || '').trim()) && !midBooking
       && /[?&](?:amp;)?to=(book|talk)\b/i.test(html + text)) {
     f.push('offers a first call or a reach-me form to a lead who is past that');
   }
