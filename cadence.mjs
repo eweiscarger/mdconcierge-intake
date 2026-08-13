@@ -14,6 +14,11 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { emailFaults, linkLabel } from './check.mjs';
 
+// A lead Eric answered by hand is his conversation for the next ten days. sent-scan.mjs stamps
+// manual_touch_at from his own Sent folder; the machine stays off the thread until it lapses.
+const MANUAL_PAUSE_DAYS = Number(process.env.MANUAL_PAUSE_DAYS || 10);
+const manualCutoff = () => new Date(Date.now() - MANUAL_PAUSE_DAYS * 86400000).toISOString();
+
 const SITE = 'https://mdconcierge.net';
 
 // Touch 1 = the approved DESIGNED email. body_text below stays as the plain-text
@@ -226,7 +231,7 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(manual_touch_at.is.null,manual_touch_at.lt.${manualCutoff()})&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
   // Approved news openers, for A/B-rotating a fresh angle into recycled leads' first touch.
   const openers = await sGet(`mdrx_content_queue?select=id,draft_hook&status=eq.approved&kind=eq.opener&order=id.desc`);
@@ -305,7 +310,7 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
     const openers = await sGet("mdrx_content_queue?select=id,headline,draft_hook,used_count&status=eq.approved&kind=eq.opener&order=used_count.asc,id.asc");
     if (!openers.length) return 0;
 
-    const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,email,funnel_token,touch_count,last_touch_at,funnel_stage&lead_type=eq.funnel&email=not.is.null&suppressed=eq.false&on_hold=eq.false&touch_count=gte.4&funnel_stage=in.(Contacted,Not Now)&order=last_touch_at.asc`);
+    const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,email,funnel_token,touch_count,last_touch_at,funnel_stage&lead_type=eq.funnel&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(manual_touch_at.is.null,manual_touch_at.lt.${manualCutoff()})&touch_count=gte.4&funnel_stage=in.(Contacted,Not Now)&order=last_touch_at.asc`);
     let n = 0, oi = 0;
     for (const p of pool) {
       if (queued.has(p.id)) continue;
