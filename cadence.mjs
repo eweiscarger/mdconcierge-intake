@@ -12,7 +12,7 @@ for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) { i
 
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { emailFaults } from './check.mjs';
+import { emailFaults, linkLabel } from './check.mjs';
 
 const SITE = 'https://mdconcierge.net';
 
@@ -32,14 +32,9 @@ const SIGNATURE_HTML = readFileSync(new URL('./email-templates/signature.html', 
 const ENGAGED_HTML = readFileSync(new URL('./email-templates/engaged.html', import.meta.url), 'utf8');
 const P = 'style="font-size:14px;line-height:1.6;color:#33404f;margin:0 0 14px;"';
 // Turn the plain-text body into the card's paragraph markup, keeping links clickable.
-function btnLabel(url){
-  const to = (String(url).match(/[?&]to=([a-z_]+)/i) || ['', ''])[1].toLowerCase();
-  if (to === 'book') return 'See my calendar';
-  if (to === 'execbrief') return 'Read the brief';
-  if (to === 'model') return 'Open the model';
-  if (to === 'program' || to === 'brief' || to === 'overview') return 'See how it works';
-  return 'See the details';
-}
+// Link names come from check.mjs so this file and the sender cannot disagree about what a
+// destination is called. The local copy that used to live here knew four destinations and called
+// everything else "See the details".
 
 function engagedHtmlBody(text){
   const NL = String.fromCharCode(10);
@@ -52,10 +47,11 @@ function engagedHtmlBody(text){
     if (/^https?:\/\/\S+$/.test(line)) {
       return '<p style="margin:22px 0;"><a href="' + line + '" style="background:#08214C;color:#ffffff;'
         + 'text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:9px;'
-        + 'display:inline-block;">' + btnLabel(line) + '</a></p>';
+        + 'display:inline-block;">' + linkLabel(line) + '</a></p>';
     }
+    // A link inside a sentence used to print the URL as its own anchor text.
     const withLinks = esc(line)
-      .replace(new RegExp('(https?://\\S+)', 'g'), '<a href="$1" style="color:#2F5EA8;">$1</a>')
+      .replace(new RegExp('(https?://\\S+)', 'g'), (u) => '<a href="' + u + '" style="color:#2F5EA8;font-weight:600;">' + linkLabel(u) + '</a>')
       .split(NL).join('<br>');
     return '<p ' + P + '>' + withLinks + '</p>';
   }).join(NL + '        ');
