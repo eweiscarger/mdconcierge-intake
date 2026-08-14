@@ -111,6 +111,17 @@ async function main() {
       const when = parsed.date || new Date();
       const extId = String(parsed.messageId || `${sentBox}:${msg.uid}`);
       const body = String(parsed.text || '').replace(/\s+/g, ' ').trim();
+
+      // The full text goes to mdrx_messages. A 400 character note is enough for a timeline and
+      // useless for writing a reply, and the assistant cannot answer what it cannot read.
+      await sPost('mdrx_messages', {
+        ext_id: extId, direction: 'out', by_hand: true,
+        from_addr: ERIC_USER, to_addrs: recipients.join(', '),
+        subject: parsed.subject || '(no subject)',
+        body_text: String(parsed.text || '').slice(0, 20000),
+        sent_at: iso(when), provider_id: lead.id,
+        matched_by: how === 'to the lead' ? 'address' : 'practice domain',
+      });
       await sPost('mdrx_activity', {
         provider_id: lead.id, type: 'email_out', created_by: 'eric', ext_id: extId,
         occurred_at: iso(when),

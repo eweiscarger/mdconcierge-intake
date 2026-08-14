@@ -203,6 +203,16 @@ async function main() {
         }
       }
 
+      // The whole message, kept once, so anything downstream can read what was actually said
+      // rather than the first 400 characters of it.
+      await sPost('mdrx_messages', {
+        ext_id: String(mid), direction: 'in', by_hand: true,
+        from_addr: fromAddr, from_name: from.name || '', to_addrs: ERIC_USER,
+        subject, body_text: String(bodyText || '').slice(0, 20000),
+        sent_at: env.date || new Date().toISOString(),
+        provider_id: prov ? prov.id : null, matched_by: prov ? 'address' : null,
+      });
+
       await sPost('mdrx_inbox_drafts', {
         message_uid: mid, from_addr: fromAddr, from_name: from.name || '', subject,
         received_at: env.date || null, snippet: bodyText.replace(/\s+/g, ' ').slice(0, 400),
