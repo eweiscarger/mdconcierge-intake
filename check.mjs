@@ -18,7 +18,16 @@ const DASH = /[–—]/;                                    // en dash, em dash
 const TRACKING = /\b(saw|noticed|see)\b[^.]{0,40}\byou\b|took a (close )?look|chance to look|going back through|been (looking|in|spending time)|thanks for taking a look|you (have been|and your team) (looking|reading|spent|in)|spent (some )?time in the/i;
 const BANNED = /own volume|favorable opinion in writing|what it comes to against/i;
 const DISPENSING = /prohibit\w* (physicians )?from dispensing|dispens\w+ (in|at) (the|your) office|office dispensing|\b2014\b/i;
-const BRITISH = /\b(authoris|organis|recognis|realis)\w*/i;
+// American spelling. The old list knew only the -ise verbs, so "programme" reached two queued
+// emails and "modelled" reached a live page before anyone caught them by eye.
+const BRITISH = new RegExp([
+  '\\b(authoris|organis|recognis|realis|analys|apologis|prioritis|minimis|maximis)\\w*',
+  '\\bprogramme\\b',
+  '\\b(modell|labell|cancell|travell|fuell|signall)(ed|ing)\\b',
+  '\\b(colour|behaviour|favour|honour|labour|flavour)\\w*',
+  '\\b(centre|licence|defence|offence|practise|enrolment|judgement)\\b',
+  '\\b(whilst|amongst|towards)\\b',
+].join('|'), 'i');
 const NAG = /checking in|circling back|following up on|touching base|any thoughts/i;
 const BLIND_TOKEN = /[?&]p=(&|"|'|\s|$)/;
 const URL_AS_TEXT = /<a\s[^>]*>\s*https?:\/\//i;
