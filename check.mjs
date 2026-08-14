@@ -50,6 +50,8 @@ export function linkLabel(url) {
   if (to === 'talk') return 'Have someone reach out';
   if (to === 'jortho') return 'Read the study';
   if (to === 'pdrx') return 'Open the PDRx formulary and calculator';
+  if (to === 'pdrxdeck') return 'the PDRx mail order presentation';
+  if (to === 'kits') return 'the injection kit list';
   // Wording lifted from touch1.html, where these three already carry approved anchor text. The
   // fallback renderer knew none of them, so an edited email would have printed the raw URL.
   if (to === 'decision') return "Pennsylvania Supreme Court decision (700 Pharmacy)";
