@@ -49,6 +49,7 @@ export function linkLabel(url) {
   if (to === 'model' || /pharmacy-model/i.test(u)) return 'Open the model';
   if (to === 'talk') return 'Have someone reach out';
   if (to === 'jortho') return 'Read the study';
+  if (to === 'pdrx') return 'Open the PDRx formulary and calculator';
   // Wording lifted from touch1.html, where these three already carry approved anchor text. The
   // fallback renderer knew none of them, so an edited email would have printed the raw URL.
   if (to === 'decision') return "Pennsylvania Supreme Court decision (700 Pharmacy)";
@@ -78,8 +79,18 @@ export function emailFaults(m) {
 
   // Addressed by name, in BOTH halves. A greeting in the plain text and a cold open in the
   // designed version is the same email arriving two different ways.
+  // Not every recipient is a physician. Practice administrators, managers and champions are
+  // addressed by first name, and demanding "Dr. Reed," of a practice administrator would be the
+  // same failure as calling a physician by his first name, only in the other direction.
+  const addressAs = String(m.addressAs || '').trim();
   const last = String(m.lastName || '').trim();
-  if (!last) f.push('no surname on the record');
+  if (addressAs) {
+    const want = new RegExp('^(?:(?:hi|hello|dear|good (?:morning|afternoon|evening))[,]?\\s+)?'
+      + addressAs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ',', 'i');
+    if (text.trim() && !want.test(text.trim())) f.push('plain text does not open on the greeting');
+    if (html.trim() && !want.test(vis)) f.push('designed email does not open on the greeting');
+  }
+  else if (!last) f.push('no surname on the record');
   else {
     // "Hi Dr. Dempsey," is a greeting. The rule was written against the cold templates, which open
     // on a bare surname, and it held six correctly addressed follow-ups for saying hello first.
