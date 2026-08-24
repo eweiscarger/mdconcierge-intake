@@ -12,10 +12,15 @@
 // Every rule below is here because it actually happened.
 
 const DASH = /[–—]/;                                    // en dash, em dash
-// "saw you" was too narrow: "Saw that you and Monica spent some time in the dispensing model this
-// week" sailed through and would have told a physician we watch him. Match the act of observing,
-// not one phrasing of it.
-const TRACKING = /\b(saw|noticed|see)\b[^.]{0,40}\byou\b|took a (close )?look|chance to look|going back through|been (looking|in|spending time)|thanks for taking a look|you (have been|and your team) (looking|reading|spent|in)|spent (some )?time in the/i;
+// Match the CLAIM that we watched him, not any mention of him looking at something. "Saw that you
+// and Monica spent time in the dispensing model this week" tells a physician we watch him. "If you
+// have had a chance to look at the injection kits" tells him nothing at all: it is the ordinary
+// polite way to raise a thing you sent someone, and it was being refused, which is why a perfectly
+// good draft for Justin Gulden came back held.
+//
+// So the giveaway is asserting it as fact. "If you have had a chance" passes; "now that you have
+// had a chance" does not, because only one of those could have been written without the tracking.
+const TRACKING = /\b(saw|noticed)\b[^.]{0,40}\byou\b|\byou (?:have been|and your team) (?:looking|reading|spent|in)\b|spent (?:some )?time in the|thanks for taking a look|going back through|\b(?:since|now that|after|given)\b[^.]{0,45}\b(?:had a chance to look|looked (?:at|through)|been through|went through|ran the numbers|worked through)\b/i;
 const BANNED = /own volume|favorable opinion in writing|what it comes to against/i;
 const DISPENSING = /prohibit\w* (physicians )?from dispensing|dispens\w+ (in|at) (the|your) office|office dispensing|\b2014\b/i;
 // American spelling. The old list knew only the -ise verbs, so "programme" reached two queued
