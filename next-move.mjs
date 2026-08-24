@@ -48,11 +48,13 @@ STAGE, absolute. If stage is Engaged or Closing, this lead is already in convers
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
+DO NOT REFER BACK TO EARLIER EMAILS he never answered. "As I mentioned", "I said I would be back in touch", "the week I told you about" all assume he read and remembers a message he never replied to. He probably does not. Make the offer stand on its own: here are times, do any of them work. If the timing happens to line up with something Eric wrote before, that is a happy accident, not something to point at.
+
 NEVER CLAIM A CONVERSATION THAT DID NOT HAPPEN. Most of these physicians have never replied to Eric. Saying he would be available in a cold email is not a promise and not an agreement. Do not write "as promised", "as discussed", "as agreed", "following up on our call", "when we spoke", or anything implying a prior exchange, unless their_replies actually shows they wrote to us. If they have never replied, the email opens on the offer itself, not on a relationship. Offering times is welcome; pretending they were owed is not.
 
 COPY RULES, absolute: no em dashes or en dashes anywhere. American spelling. Never reveal that opens, clicks or reading are tracked: no "I saw you", no "you had a chance to look", no reference to anything he read or clicked. Never mention in-office dispensing. Never offer to estimate his opportunity from his own volume. Never invent a number, a name or a legal conclusion.
 
-ADDRESSING: The lead is a physician. ALWAYS address them as "Dr. [last name]" in the greeting (e.g., "Hi Dr. Rao,"), NEVER by first name. Only office staff, practice managers, and champions are addressed by first name, and those are not the lead here.
+ADDRESSING: use the address_as value given to you, exactly. Most leads are physicians and it will say "Dr. Rao". Some are practice administrators or managers who came in through a referral, and for them it will say a first name. Calling an administrator "Dr." is as wrong as calling a physician by his first name. Never substitute your own guess for address_as.
 
 Draft voice: brief, human, never templated or salesy. NO em dashes or en dashes (use commas or periods). Never mention commission or tie economics to prescribing. Never invent facts, numbers, names, or legal conclusions. Name it in full: "MDRx Workers' Compensation Pharmacy Program". Keep the body short.
 
@@ -126,7 +128,7 @@ async function promoteDueMoves() {
   for (const mv of due) {
     if (String(mv.channel || 'email') !== 'email') continue;   // calls stay recommendations
     if (already.has(mv.provider_id)) continue;
-    const [p] = await sGet(`mdrx_providers?select=id,last_name,email,funnel_token,funnel_stage,suppressed,on_hold&id=eq.${mv.provider_id}`);
+    const [p] = await sGet(`mdrx_providers?select=id,first_name,last_name,credentials,email,funnel_token,funnel_stage,suppressed,on_hold&id=eq.${mv.provider_id}`);
     // A recommendation made last week must not go out to a lead Eric has since pulled off
     // automation. The hold is checked at the moment of queueing, not only at the moment of drafting.
     if (!p || !p.email || p.suppressed || p.on_hold) continue;
@@ -141,8 +143,12 @@ async function promoteDueMoves() {
     // something he then has to notice is wrong.
     // The gate refuses invented history, but only when the physician has genuinely never written.
     const { count: replyCount } = { count: (await sGet(`mdrx_inbox_drafts?select=id&provider_id=eq.${p.id}&limit=1`) || []).length };
-    const faults = emailFaults({ html, text, lastName: p.last_name, toEmail: p.email, stage: p.funnel_stage,
-      neverReplied: replyCount === 0 });
+    // Check the draft against the name it should actually use, not against a Dr. it may not be.
+    const isStaff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
+    const faults = emailFaults({ html, text,
+      lastName: isStaff ? '' : p.last_name,
+      addressAs: isStaff ? (p.first_name || p.last_name || '') : '',
+      toEmail: p.email, stage: p.funnel_stage, neverReplied: replyCount === 0 });
     if (faults.length) {
       console.error(`next-move: refused to queue move ${mv.id} for ${p.email}: ${faults.join(', ')}`);
       await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, {
@@ -187,7 +193,7 @@ async function main() {
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
   // on_hold means Eric took this lead off automation by hand. It was not checked here, so a lead
   // he had already pulled out kept getting drafted for, three times in a week.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,manual_touch_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,credentials,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,manual_touch_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
@@ -232,7 +238,10 @@ async function main() {
       sGet(`mdrx_activity?select=type,subject,notes,occurred_at&provider_id=eq.${p.id}&order=occurred_at.desc&limit=5`),
     ]);
     const ctx = {
-      name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), last_name: p.last_name, address_as: `Dr. ${p.last_name || ''}`.trim(), practice: p.practice_name, specialty: p.specialty,
+      name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), last_name: p.last_name,
+      // Administrators and managers come in through referrals and are not physicians.
+      address_as: /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''))
+        ? (p.first_name || p.last_name || '') : `Dr. ${p.last_name || ''}`.trim(), practice: p.practice_name, specialty: p.specialty,
       stage: p.funnel_stage, score: p.funnel_score, tier: p.intent_tier, behavior_flag: p.behavior_flag,
       last_cta: p.funnel_last_cta, opens: p.funnel_open_count, clicked: p.funnel_clicked, booked: p.funnel_booked,
       touches_so_far: p.touch_count, last_touch_at: p.last_touch_at, current_next_step: p.next_step,
