@@ -314,6 +314,24 @@ async function main() {
         provider_id: prov ? prov.id : null, matched_by: prov ? 'address' : null,
       });
 
+      // The reply also becomes a next move on his record, so it is waiting in the profile where Eric
+      // actually works rather than only in the replies list. A drafted answer nobody sees is the
+      // same as no answer, and Amanda Dowdy waited four days inside a system that had every part
+      // needed to write back to her.
+      if (prov && a.draft && a.sentiment === 'workable') {
+        const [openMove] = await sGet(`mdrx_next_moves?select=id&provider_id=eq.${prov.id}&status=eq.pending&limit=1`);
+        if (!openMove) {
+          const subj = /^re:/i.test(String(subject || '').trim()) ? String(subject).trim() : 'Re: ' + String(subject || '').trim();
+          await sPost('mdrx_next_moves', {
+            provider_id: prov.id, recommended_date: new Date().toISOString().slice(0, 10),
+            channel: 'email', angle: 'answer what he actually wrote',
+            reason: `${who} wrote in on ${String(env.date || '').slice(0, 10)} and is waiting on an answer. Drafted from what he said, not from the cadence.`,
+            draft: a.draft, subject: subj, status: 'pending',
+          });
+          console.log(`  ${who}: reply drafted onto his record, waiting in the profile`);
+        }
+      }
+
       await sPost('mdrx_inbox_drafts', {
         message_uid: mid, from_addr: fromAddr, from_name: from.name || '', subject,
         received_at: env.date || null, snippet: bodyText.replace(/\s+/g, ' ').slice(0, 400),
