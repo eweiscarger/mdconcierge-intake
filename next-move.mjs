@@ -48,7 +48,7 @@ STAGE, absolute. If stage is Engaged, Hot, Closing or Won, this lead is already 
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
-BOOKING. Eric is easy to book with and the email should sound like it. open_slots holds the days and windows he is actually free, read from his calendar as this was written. Say them the way a person would: "I am around Tuesday 9 to 11:30 and Thursday afternoon, does either suit?" Never name a pinpoint time like 10:15, never invent a day that is not in that list, and never turn the email into a timetable: two days is plenty. Always give the other door as well, that he can pick a time himself from Eric's calendar, because some people would rather choose than be offered. Whatever he picks or proposes gets confirmed with a calendar invitation and a Zoom link, so do not ask him to confirm twice or promise to "send details over" later. If open_slots is empty, Eric is open and it should say so plainly, something like most of the day either side of lunch, and ask what suits him.
+BOOKING. Eric is easy to book with and the email should say so in those words or close to them. Never name a clock time. Not "Tuesday at 10", not "10:15", not "between 9 and 11:30", not a range of any kind. open_slots holds whole blocks read off his calendar, like "Tuesday, open most of the day", and that is the most precise you are ever allowed to be. Name at most two of those days. Then hand him the choice, both ways: he can propose whatever time suits him, or pick one straight off Eric's calendar, and put that calendar link on a line by itself so it comes through as a button. Whatever he proposes or picks comes back with a calendar invitation and a Zoom link, so never promise to "send details over" afterwards and never ask him to confirm twice. If open_slots is empty, say plainly that Eric is wide open and ask what suits him.
 
 WRITE TO WHAT WAS ACTUALLY SAID. the_thread holds the real correspondence, newest first, both what was sent to him and anything he sent back. Read it before you write a word. If Eric last sent him the formulary, the follow-up is about the formulary. If Eric wrote by hand about injection kits at his specific practice, the follow-up continues THAT, not a generic offer of a call. Anything marked "written by hand" is Eric choosing his own words for this person and matters more than any cadence touch. A follow-up that could have been sent to anyone on the list is a failed follow-up.
 
@@ -203,27 +203,36 @@ function practiceDomain(email) {
 
 // Real openings from Eric's calendar, not times the model imagines. Proposing "Tuesday at 10am"
 // to a physician who says yes, when Eric is booked, is worse than sending no times at all: he has
-// to walk it back, and the one thing the follow-up was buying was the impression of being organised.
+// to walk it back, and the one thing the follow-up was buying was the impression of being organized.
 async function openSlots() {
   try {
     const r = await fetch('https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/booking-slots?type=intro');
     const j = await r.json();
     const tz = j.timezone || 'America/New_York';
-    const fmt = (iso, o) => new Intl.DateTimeFormat('en-US', { timeZone: tz, ...o }).format(new Date(iso));
-    const hhmm = { hour: 'numeric', minute: '2-digit' };
+    // No clock times leave this function. A range like "4:30 PM to 8:00 PM" is accurate and still
+    // reads as a machine reciting a database, and quoting a specific time invites a physician to
+    // accept one Eric never meant to single out. He is easy to book with; the honest shape of that
+    // is a day and a part of the day, and then let the man choose.
+    const hourIn = (iso) => {
+      const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(iso));
+      return Number((p.find((x) => x.type === 'hour') || {}).value || 0);
+    };
     const out = [];
-    // Three days is an offer. Ten is a timetable, and a timetable invites nobody.
     for (const day of Object.keys(j.windows || {}).sort().slice(0, 3)) {
       const win = j.windows[day] || [];
       if (!win.length) continue;
-      const dayName = fmt(win[0].start, { weekday: 'long', month: 'short', day: 'numeric' });
-      const open = win.reduce((n, w) => n + (Date.parse(w.end) - Date.parse(w.start)), 0);
-      // The honest answer for an empty day is "most of the day", not "9:00 AM to 8:00 PM". Reading
-      // a working day back as a range is technically true and sounds like a database, and it also
-      // quietly claims Eric will take a call at ten to eight in the evening.
-      if (win.length === 1 && open >= 6 * 3600000) { out.push(`${dayName}: open most of the day`); continue; }
-      out.push(`${dayName}: ` + win.slice(0, 3)
-        .map((w) => `${fmt(w.start, hhmm)} to ${fmt(w.end, hhmm)}`).join(', '));
+      const dayName = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long' }).format(new Date(win[0].start));
+      // Which parts of an ordinary working day he actually has free.
+      let morning = false, afternoon = false;
+      for (const w of win) {
+        const from = hourIn(w.start), to = hourIn(w.end);
+        if (from < 12 && to > 9) morning = true;
+        if (to > 13 && from < 17) afternoon = true;
+      }
+      if (morning && afternoon) out.push(`${dayName}, open most of the day`);
+      else if (morning) out.push(`${dayName}, open in the morning`);
+      else if (afternoon) out.push(`${dayName}, open in the afternoon`);
+      // Free only after five is not an offer worth making to a physician, so that day is skipped.
     }
     return out;
   } catch (e) { console.error('could not read the calendar: ' + e.message); return []; }
@@ -257,7 +266,7 @@ async function main() {
       return true;
     })
     .filter((p) => !p.funnel_next_date || p.funnel_next_date <= today || p.behavior_flag)
-    // Anyone carrying a behaviour flag has done something and is waiting on a response to it, so
+    // Anyone carrying a behavior flag has done something and is waiting on a response to it, so
     // they go first. Sorting by score alone meant a flagged lead sitting at position twenty seven
     // never came up: the run took the top ten by score, every run, and the tail was never worked.
     .sort((a, b) => {
@@ -373,7 +382,7 @@ async function main() {
     // reflect the recommendation on the record so nothing sits with no plan
     // The flag has been answered: a move is planned against it. Leaving it up meant thirty six
     // records permanently reading "needs attention", which is the same as none of them doing so.
-    // The behaviour is still on the timeline; only the outstanding-work marker comes down.
+    // The behavior is still on the timeline; only the outstanding-work marker comes down.
     await sPatch(`mdrx_providers?id=eq.${p.id}`, {
       next_step: mv.angle || p.next_step,
       funnel_next_date: mv.recommended_date,
