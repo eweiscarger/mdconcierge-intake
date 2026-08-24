@@ -131,8 +131,15 @@ export function emailFaults(m) {
   // The opt-out has to exist in both halves, and must never be the first thing he reads. It once
   // rendered above the greeting in every email for two days because a <p> sat outside its <td>.
   const OPTOUT = /aren't interested|don't wish to hear/i;
-  if (html.trim() && !OPTOUT.test(vis)) f.push('no opt-out in the designed email');
-  if (text.trim() && !OPTOUT.test(text)) f.push('no opt-out in the plain text');
+  // Only campaign mail carries an opt-out. A one to one email Eric writes to a physician he is in
+  // conversation with is not marketing, and an unsubscribe line at the bottom of it announces that
+  // it is, which is both untrue and the exact impression the letter format exists to avoid. The
+  // rule was written when everything this system sent was a cadence touch, and it stayed applied to
+  // everything after that stopped being true.
+  if (m.campaign) {
+    if (html.trim() && !OPTOUT.test(vis)) f.push('no opt-out in the designed email');
+    if (text.trim() && !OPTOUT.test(text)) f.push('no opt-out in the plain text');
+  }
   if (html.trim()) {
     const o = vis.search(OPTOUT), d = vis.indexOf('Dr. ');
     if (o > -1 && d > -1 && o < d) f.push('opt-out appears above the greeting');
