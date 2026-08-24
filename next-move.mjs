@@ -48,7 +48,7 @@ STAGE, absolute. If stage is Engaged, Hot, Closing or Won, this lead is already 
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
-ONLY OFFER TIMES FROM open_slots. Those are real openings read from Eric's calendar at the moment this was written. Never invent a time, never round one to sound tidier, never offer a day that is not in that list. Quote two or three of them, in Eastern time, exactly as given. If open_slots is empty, do not name any time: ask him what suits and say Eric will work around it. A physician who accepts a time Eric cannot make is worse off than one who was asked.
+BOOKING. Eric is easy to book with and the email should sound like it. open_slots holds the days and windows he is actually free, read from his calendar as this was written. Say them the way a person would: "I am around Tuesday 9 to 11:30 and Thursday afternoon, does either suit?" Never name a pinpoint time like 10:15, never invent a day that is not in that list, and never turn the email into a timetable: two days is plenty. Always give the other door as well, that he can pick a time himself from Eric's calendar, because some people would rather choose than be offered. Whatever he picks or proposes gets confirmed with a calendar invitation and a Zoom link, so do not ask him to confirm twice or promise to "send details over" later. If open_slots is empty, Eric is open and it should say so plainly, something like most of the day either side of lunch, and ask what suits him.
 
 WRITE TO WHAT WAS ACTUALLY SAID. the_thread holds the real correspondence, newest first, both what was sent to him and anything he sent back. Read it before you write a word. If Eric last sent him the formulary, the follow-up is about the formulary. If Eric wrote by hand about injection kits at his specific practice, the follow-up continues THAT, not a generic offer of a call. Anything marked "written by hand" is Eric choosing his own words for this person and matters more than any cadence touch. A follow-up that could have been sent to anyone on the list is a failed follow-up.
 
@@ -208,14 +208,24 @@ async function openSlots() {
   try {
     const r = await fetch('https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/booking-slots?type=intro');
     const j = await r.json();
+    const tz = j.timezone || 'America/New_York';
+    const fmt = (iso, o) => new Intl.DateTimeFormat('en-US', { timeZone: tz, ...o }).format(new Date(iso));
+    const hhmm = { hour: 'numeric', minute: '2-digit' };
     const out = [];
-    for (const day of Object.keys(j.days || {}).sort()) {
-      // Two per day is enough to offer without turning the email into a timetable.
-      for (const s of (j.days[day] || []).slice(0, 8).filter((_, i) => i % 3 === 0).slice(0, 2)) {
-        out.push(s.label);
-      }
+    // Three days is an offer. Ten is a timetable, and a timetable invites nobody.
+    for (const day of Object.keys(j.windows || {}).sort().slice(0, 3)) {
+      const win = j.windows[day] || [];
+      if (!win.length) continue;
+      const dayName = fmt(win[0].start, { weekday: 'long', month: 'short', day: 'numeric' });
+      const open = win.reduce((n, w) => n + (Date.parse(w.end) - Date.parse(w.start)), 0);
+      // The honest answer for an empty day is "most of the day", not "9:00 AM to 8:00 PM". Reading
+      // a working day back as a range is technically true and sounds like a database, and it also
+      // quietly claims Eric will take a call at ten to eight in the evening.
+      if (win.length === 1 && open >= 6 * 3600000) { out.push(`${dayName}: open most of the day`); continue; }
+      out.push(`${dayName}: ` + win.slice(0, 3)
+        .map((w) => `${fmt(w.start, hhmm)} to ${fmt(w.end, hhmm)}`).join(', '));
     }
-    return out.slice(0, 6);
+    return out;
   } catch (e) { console.error('could not read the calendar: ' + e.message); return []; }
 }
 

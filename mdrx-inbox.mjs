@@ -39,6 +39,66 @@ const TEAM_DESC = "Phil D'Adderio (MDRx Managing Partner), Brian, Joseph, Rishin
 // Cold stages a workable reply is allowed to advance to Engaged (never downgrade a warmer lead).
 const COLD = new Set(['New', 'Queued', 'Contacted', null, undefined, '']);
 
+// "Thursday at 2 works" used to be the end of the road. The scanner read it, filed it as a warm
+// reply, and left Eric to notice, check his calendar, write back, make the Zoom and send the
+// invitation. Every hour that took is an hour a physician who said yes sat waiting.
+//
+// So a firmly named time is checked against the calendar and, if it is genuinely free, booked
+// through the same function the booking page calls: same Zoom meeting, same calendar invitation
+// to both of them, same confirmation wording. Nothing new is composed here.
+//
+// It books ONLY on an exact match to a real opening. A time that is taken, outside working hours
+// or past the horizon books nothing and lands on Eric's desk instead, because the failure that
+// matters is a physician holding an invitation for a call Eric cannot take.
+const ET = 'America/New_York';
+// Eastern wall clock to a real instant, without pulling in a date library. Guess at UTC, ask what
+// that instant reads as in New York, and correct by the difference; one pass settles it except
+// across a DST boundary, where the second does.
+function etToUTC(local) {
+  const m = String(local).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m.map(Number);
+  let t = Date.UTC(y, mo - 1, d, h, mi);
+  for (let i = 0; i < 2; i++) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: ET, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(t)).filter((x) => x.type !== 'literal').map((x) => [x.type, Number(x.value)]));
+    const shown = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    if (shown === Date.UTC(y, mo - 1, d, h, mi)) break;
+    t += Date.UTC(y, mo - 1, d, h, mi) - shown;
+  }
+  return new Date(t);
+}
+
+async function bookProposedTime(prov, local, name, email) {
+  const want = etToUTC(local);
+  if (!want || isNaN(want)) return { booked: false, why: 'could not read that as a time' };
+  if (want.getTime() < Date.now()) return { booked: false, why: 'that time has already passed' };
+  let slots;
+  try {
+    const r = await fetch('https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/booking-slots?type=intro');
+    slots = await r.json();
+  } catch (e) { return { booked: false, why: 'could not read the calendar: ' + e.message }; }
+  // The same test booking-create applies: the whole call has to fit inside a genuinely free window.
+  const dur = (slots.duration || 15) * 60000;
+  const fits = Object.values(slots.windows || {}).flat()
+    .some((w) => want.getTime() >= Date.parse(w.start) && want.getTime() + dur <= Date.parse(w.end));
+  if (!fits) return { booked: false, why: 'he is not free then' };
+  if (want.getTime() % (5 * 60000) !== 0) return { booked: false, why: 'that reads as an odd time, worth confirming' };
+  const label = new Intl.DateTimeFormat('en-US', { timeZone: ET, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(want);
+  const hit = { start: want.toISOString(), label };
+  try {
+    const r = await fetch('https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/booking-create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'intro', mode: 'video', start: hit.start, name, email, token: prov.funnel_token || undefined }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) return { booked: false, why: j.error || ('booking refused, ' + r.status) };
+    return { booked: true, when: hit.label, start: hit.start };
+  } catch (e) { return { booked: false, why: 'booking failed: ' + e.message }; }
+}
+
 // One model call: classify sentiment AND (when useful) draft a reply. Returns
 // { sentiment: 'workable'|'decline'|'optout', hot: bool, draft: string }.
 async function analyzeAndDraft(who, fromAddr, subject, body, isTeam) {
@@ -67,8 +127,12 @@ Founder, MDconcierge
 Referral Management • Work Comp Pharmacy • Ancillary Coordination
 (570) 817-7569 • eric@mdconcierge.net • mdconcierge.net
 
-Return ONLY: {"sentiment":"...","hot":true|false,"draft":"..."}`;
-  const user = `This email is from ${who} <${fromAddr}>${isTeam ? ' (an MDRx360 TEAMMATE, not a prospect)' : ''}. Subject: "${subject}".\n\nFull thread (most recent on top):\n"""\n${String(body || '').slice(0, 4500)}\n"""`;
+4) "proposed_time": if the sender names a specific time they want the call, return it as "YYYY-MM-DDTHH:MM" in Eastern wall-clock time. Resolve relative days ("Thursday", "tomorrow", "next week") against TODAY, given below, and always resolve forward: a weekday already past this week means the next one. Business hours are meant, so a bare "2" or "2 o'clock" is 14:00, and only take a morning reading when they say morning or am. Return "" unless they have named a time firmly enough to put in a diary: "Thursday at 2" and "how about 10am Tuesday" qualify, "sometime next week", "an afternoon works" and "I am free Thursdays" do not. If they offer several, return the first. If they are moving or cancelling an existing call rather than making one, return "".
+
+Return ONLY: {"sentiment":"...","hot":true|false,"draft":"...","proposed_time":"..."}`;
+  const today = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
+  const todayISO = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).toISOString().slice(0, 10);
+  const user = `TODAY is ${today} (${todayISO}), Eastern time. This email is from ${who} <${fromAddr}>${isTeam ? ' (an MDRx360 TEAMMATE, not a prospect)' : ''}. Subject: "${subject}".\n\nFull thread (most recent on top):\n"""\n${String(body || '').slice(0, 4500)}\n"""`;
   try {
     const m = await anthropic.messages.create({ model: 'claude-sonnet-5', max_tokens: 650, system: sys, messages: [{ role: 'user', content: user }] });
     const raw = (m.content?.[0]?.text || '').trim();
@@ -77,16 +141,16 @@ Return ONLY: {"sentiment":"...","hot":true|false,"draft":"..."}`;
     let s = String(o.sentiment || '').toLowerCase();
     if (!['workable', 'decline', 'optout'].includes(s)) s = 'workable'; // parse safety: leave for human, never auto-suppress on doubt
     if (isTeam) s = 'workable';
-    return { sentiment: s, hot: !!o.hot, draft: (o.draft || '').trim() };
+    return { sentiment: s, hot: !!o.hot, draft: (o.draft || '').trim(), proposedTime: String(o.proposed_time || '').trim() };
   } catch (e) {
     console.error('analyze failed: ' + e.message);
-    return { sentiment: 'workable', hot: false, draft: '' }; // safe default: surfaced to Eric, no auto-routing side effects beyond flag
+    return { sentiment: 'workable', hot: false, draft: '', proposedTime: '' }; // safe default: surfaced to Eric, no auto-routing side effects beyond flag
   }
 }
 
 async function main() {
   // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
-  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type,cell,office_phone');
+  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type,cell,office_phone,funnel_token');
   const existing = await sGet('mdrx_inbox_drafts?select=message_uid');
   const seen = new Set((existing || []).map(d => d.message_uid));
   const supp = await sGet('suppressions?select=email');
@@ -120,7 +184,7 @@ async function main() {
 
       // Classify + draft (cap the model spend per run).
       const a = created < 10 ? await analyzeAndDraft(who, fromAddr, subject, bodyText, isTeam)
-                             : { sentiment: 'workable', hot: false, draft: '' };
+                             : { sentiment: 'workable', hot: false, draft: '', proposedTime: '' };
 
       // ---- Better ways to reach him -------------------------------------------------------
       // Every touch now asks: if phone or text is easier, send your cell or a personal email.
@@ -199,6 +263,34 @@ async function main() {
               if (!prov.engaged_at) patch.engaged_at = new Date().toISOString();
             }
             await sPatch(`mdrx_providers?id=eq.${prov.id}`, patch); routed++;
+
+            // They named a time. Take it if it is really free.
+            if (a.proposedTime) {
+              const nm = (from.name || `${prov.first_name || ''} ${prov.last_name || ''}`).trim() || fromAddr;
+              const res = await bookProposedTime(prov, a.proposedTime, nm, fromAddr);
+              if (res.booked) {
+                await sPatch(`mdrx_providers?id=eq.${prov.id}`, {
+                  funnel_stage: 'Meeting Booked', needs_attention: false, priority: 'normal',
+                  next_step: `Call booked for ${res.when}. Invitation and Zoom link are with him.`,
+                  funnel_next_date: null,
+                });
+                await sPost('mdrx_activity', {
+                  provider_id: prov.id, type: 'note', occurred_at: new Date().toISOString(),
+                  subject: 'Booked the time he asked for',
+                  notes: `He proposed ${a.proposedTime} Eastern and it was free, so it is booked for ${res.when}. Calendar invitation and Zoom link sent to you both.`,
+                  created_by: 'inbox agent',
+                });
+                console.log(`  ${who}: proposed ${a.proposedTime}, booked for ${res.when}`);
+              } else {
+                // Wanted a specific time we cannot give. That is Eric's to answer, today, and the
+                // reason has to be on the record or he is guessing at why it did not take.
+                await sPatch(`mdrx_providers?id=eq.${prov.id}`, {
+                  needs_attention: true, priority: 'high',
+                  next_step: `He asked for ${a.proposedTime} Eastern and it did not take (${res.why}). Offer him the nearest thing.`,
+                });
+                console.log(`  ${who}: proposed ${a.proposedTime}, not booked (${res.why})`);
+              }
+            }
           }
         }
       }
