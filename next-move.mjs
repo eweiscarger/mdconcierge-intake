@@ -134,7 +134,9 @@ async function promoteDueMoves() {
     // A recommendation made last week must not go out to a lead Eric has since pulled off
     // automation. The hold is checked at the moment of queueing, not only at the moment of drafting.
     if (!p || !p.email || p.suppressed || p.on_hold) continue;
-    const draft = String(mv.draft || '').trim();
+    // The model sometimes writes a subject line into the body. The row already carries its own
+    // subject, so left in it would print "Subject: A couple of times this week" above the greeting.
+    const draft = String(mv.draft || '').replace(/^[ \t]*subject:[^\n]*\n+/i, '').trim();
     if (!draft) continue;
     // The card injected the opt-out and the plain text did not, so every drafted follow-up failed
     // the gate on arrival and sat in the queue as held. Both halves carry it, same wording.
