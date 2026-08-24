@@ -35,6 +35,9 @@ const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (convers
 // Pointing back at an email he never answered. Softer than claiming a deal and just as wrong:
 // it assumes he read it and remembers. The model kept reaching for this after being told not
 // to, twice, which is why it is a rule and not a preference.
+// Eric's holiday is not news to a physician who has never replied to him. He does not know Eric
+// was away, was not waiting, and does not care. Announcing a return implies he was.
+const ANNOUNCES_A_RETURN = /i'?m back|i am back|now that i'?m back|back from (my|a) |while i was away|before i went away|on my return|back in the office|returned from/i;
 const POINTS_BACK = /I mentioned|I had mentioned|I said I would|as planned|I told you|the (day|week) I (said|mentioned)|like I said|as I noted|my last (email|note) said/i;
 const BLIND_TOKEN = /[?&]p=(&|"|'|\s|$)/;
 const URL_AS_TEXT = /<a\s[^>]*>\s*https?:\/\//i;
@@ -142,6 +145,7 @@ export function emailFaults(m) {
   if (NAG.test(both)) f.push('banned follow-up phrase');
   if (m.neverReplied && CLAIMS_A_DEAL.test(both)) f.push('claims a conversation that never happened');
   if (m.neverReplied && POINTS_BACK.test(both)) f.push('points back at an email he never answered');
+  if (m.neverReplied && ANNOUNCES_A_RETURN.test(both)) f.push('announces a return to someone who never knew he was away');
 
   // Tracking that cannot work is worse than none: the click is dropped and the lead never moves.
   if (BLIND_TOKEN.test(html + text)) f.push('tracking token is empty');
