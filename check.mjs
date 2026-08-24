@@ -28,6 +28,10 @@ const DISPENSING = /prohibit\w* (physicians )?from dispensing|dispens\w+ (in|at)
 // days while Eric was away. Only the British inflections are listed now.
 const BRITISH = /\b(authoris|organis|recognis|realis|apologis|prioritis|minimis|maximis)\w*|\banalys(e|es|ed|ing)\b|\bprogramme\b|\b(modell|labell|cancell|travell|fuell|signall)(ed|ing)\b|\b(colour|behaviour|favour|honour|labour|flavour)\w*|\b(centre|licence|defence|offence|practise|enrolment|judgement)\b|\b(whilst|amongst|towards)\b/i;
 const NAG = /checking in|circling back|following up on|touching base|any thoughts/i;
+// Language that claims a prior agreement. Saying you would be available in a cold email is
+// not a promise, and 'following up as promised' to a physician who has never replied invents
+// a relationship. Only refused when he has never written back.
+const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (conversation|call|discussion)|following up on our|as agreed|you asked me to|when we spoke|after our (call|conversation)|good (talking|speaking) (to|with) you/i;
 const BLIND_TOKEN = /[?&]p=(&|"|'|\s|$)/;
 const URL_AS_TEXT = /<a\s[^>]*>\s*https?:\/\//i;
 
@@ -132,6 +136,7 @@ export function emailFaults(m) {
   if (DISPENSING.test(vis)) f.push('raises in-office dispensing');
   if (BRITISH.test(both)) f.push('British spelling');
   if (NAG.test(both)) f.push('banned follow-up phrase');
+  if (m.neverReplied && CLAIMS_A_DEAL.test(both)) f.push('claims a conversation that never happened');
 
   // Tracking that cannot work is worse than none: the click is dropped and the lead never moves.
   if (BLIND_TOKEN.test(html + text)) f.push('tracking token is empty');

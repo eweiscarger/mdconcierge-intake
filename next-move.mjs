@@ -48,6 +48,8 @@ STAGE, absolute. If stage is Engaged or Closing, this lead is already in convers
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
+NEVER CLAIM A CONVERSATION THAT DID NOT HAPPEN. Most of these physicians have never replied to Eric. Saying he would be available in a cold email is not a promise and not an agreement. Do not write "as promised", "as discussed", "as agreed", "following up on our call", "when we spoke", or anything implying a prior exchange, unless their_replies actually shows they wrote to us. If they have never replied, the email opens on the offer itself, not on a relationship. Offering times is welcome; pretending they were owed is not.
+
 COPY RULES, absolute: no em dashes or en dashes anywhere. American spelling. Never reveal that opens, clicks or reading are tracked: no "I saw you", no "you had a chance to look", no reference to anything he read or clicked. Never mention in-office dispensing. Never offer to estimate his opportunity from his own volume. Never invent a number, a name or a legal conclusion.
 
 ADDRESSING: The lead is a physician. ALWAYS address them as "Dr. [last name]" in the greeting (e.g., "Hi Dr. Rao,"), NEVER by first name. Only office staff, practice managers, and champions are addressed by first name, and those are not the lead here.
@@ -137,7 +139,10 @@ async function promoteDueMoves() {
     // A draft is written by a model, so it is exactly the thing that has to be checked before it
     // reaches Eric's queue. The recommendation stays pending and says why, rather than queueing
     // something he then has to notice is wrong.
-    const faults = emailFaults({ html, text, lastName: p.last_name, toEmail: p.email, stage: p.funnel_stage });
+    // The gate refuses invented history, but only when the physician has genuinely never written.
+    const { count: replyCount } = { count: (await sGet(`mdrx_inbox_drafts?select=id&provider_id=eq.${p.id}&limit=1`) || []).length };
+    const faults = emailFaults({ html, text, lastName: p.last_name, toEmail: p.email, stage: p.funnel_stage,
+      neverReplied: replyCount === 0 });
     if (faults.length) {
       console.error(`next-move: refused to queue move ${mv.id} for ${p.email}: ${faults.join(', ')}`);
       await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, {
