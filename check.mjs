@@ -37,6 +37,9 @@ const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (convers
 // to, twice, which is why it is a rule and not a preference.
 // Eric's holiday is not news to a physician who has never replied to him. He does not know Eric
 // was away, was not waiting, and does not care. Announcing a return implies he was.
+// A time on the clock: "10am", "2 pm", "10:30", "at 4". Deliberately not matching a bare number,
+// so "8 to 5" and "570 817 7569" pass, and not matching a date.
+const CLOCK_TIME = /\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?(?!\d)|\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i;
 const ANNOUNCES_A_RETURN = /i'?m back|i am back|now that i'?m back|back from (my|a) |while i was away|before i went away|on my return|back in the office|returned from/i;
 const POINTS_BACK = /I mentioned|I had mentioned|I said I would|as planned|I told you|the (day|week) I (said|mentioned)|like I said|as I noted|my last (email|note) said/i;
 const BLIND_TOKEN = /[?&]p=(&|"|'|\s|$)/;
@@ -146,6 +149,14 @@ export function emailFaults(m) {
   if (m.neverReplied && CLAIMS_A_DEAL.test(both)) f.push('claims a conversation that never happened');
   if (m.neverReplied && POINTS_BACK.test(both)) f.push('points back at an email he never answered');
   if (m.neverReplied && ANNOUNCES_A_RETURN.test(both)) f.push('announces a return to someone who never knew he was away');
+  // Eric said it twice: stop throwing clock times at people. He is easy to book with, so an offer
+  // names whole blocks of a day and then lets the physician choose, either by proposing a time or
+  // picking one off the calendar. "Tuesday at 10" invites a yes to a slot nobody singled out.
+  //
+  // Scoped to people who have never written back, because that is where we are OFFERING times. A
+  // man who proposed Thursday at two must be answered with Thursday at two, and no rule of Eric's
+  // gets to stand in the way of a reply.
+  if (m.neverReplied && CLOCK_TIME.test(both)) f.push('names a clock time instead of offering whole blocks of a day');
 
   // Tracking that cannot work is worse than none: the click is dropped and the lead never moves.
   if (BLIND_TOKEN.test(html + text)) f.push('tracking token is empty');
