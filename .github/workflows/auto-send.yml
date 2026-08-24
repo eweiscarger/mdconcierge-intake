@@ -12,7 +12,13 @@ name: Send the day's outreach
 # window in the physician's own timezone, and this job simply gives the function chances to notice
 # that a moment has arrived. Changing the windows is a config edit, not a change to this file.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: 'Send only these outbox row ids, comma separated. Leave empty to send whatever is due.'
+        required: false
+        default: ''
+
   schedule:
     - cron: '*/15 10-21 * * 1-5'   # 10:00-21:00 UTC, weekdays: covers 6:30am ET through 1pm PT
 
@@ -32,13 +38,22 @@ jobs:
         env:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           MDC_CRON_SECRET: ${{ secrets.MDC_CRON_SECRET }}
+          IDS: ${{ github.event.inputs.ids }}
         run: |
+          # Sending one specific row on demand, rather than everything that happens to be due. A run
+          # meant to release a single held email must never become a send of the whole queue.
+          if [ -n "$IDS" ]; then
+            PAYLOAD="{\"ids\":[$IDS]}"
+            echo "sending only rows: $IDS"
+          else
+            PAYLOAD='{}'
+          fi
           resp=$(curl -sS -w '\n%{http_code}' -X POST \
             'https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/send-outreach' \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "x-mdc-cron: $MDC_CRON_SECRET" \
             -H 'Content-Type: application/json' \
-            -d '{}')
+            -d "$PAYLOAD")
           body=$(echo "$resp" | head -n -1)
           code=$(echo "$resp" | tail -n 1)
           echo "$body"
