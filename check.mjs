@@ -42,6 +42,9 @@ const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (convers
 // The language of offering to meet. Kept to phrases that only appear when time is being offered,
 // so a passing mention of a call in a different sort of email does not demand a booking link.
 const OFFERS_TO_MEET = /\bopen (?:most of the day|in the morning|in the afternoon)\b|\b(?:pick|choose|grab) a time\b|\bwhatever time suits\b|\btime that suits\b|\bpropose a time\b|\bmy calendar\b/i;
+// "Eric is", "Eric will", "Eric has". Not "Eric Weiscarger" in the signature, and not a possessive
+// like "Eric's calendar", which is how a person does refer to their own diary in writing.
+const THIRD_PERSON_ERIC = /\bEric\s+(?:is|was|will|would|can|could|has|had|does|did|wants|prefers|thinks|said|asked|works|runs)\b/i;
 const CLOCK_TIME = /\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?(?!\d)|\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i;
 const ANNOUNCES_A_RETURN = /i'?m back|i am back|now that i'?m back|back from (my|a) |while i was away|before i went away|on my return|back in the office|returned from/i;
 const POINTS_BACK = /I mentioned|I had mentioned|I said I would|as planned|I told you|the (day|week) I (said|mentioned)|like I said|as I noted|my last (email|note) said/i;
@@ -186,6 +189,10 @@ export function emailFaults(m) {
   if (OFFERS_TO_MEET.test(both) && !/[?&](?:amp;)?to=book\b/i.test(html + text)) {
     f.push('offers to meet without giving him the calendar link');
   }
+  // The email is from Eric. A draft that says "Eric is easy to book with" reads as though somebody
+  // else wrote it on his behalf, which is exactly what happened, and the physician can tell. His own
+  // name in the sign-off is fine; his name as the subject of a sentence is not.
+  if (THIRD_PERSON_ERIC.test(both)) f.push('talks about Eric in the third person in an email from Eric');
   // The reach-me form asks a man in mid conversation how to get hold of him. That stays refused.
   // The CALENDAR does not: an email that offers to meet has to hand him the link, whatever stage he
   // is at, and this rule used to strip it from exactly the people closest to booking. Blocking a
