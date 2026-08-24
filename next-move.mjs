@@ -30,7 +30,7 @@ const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v
 const SYSTEM = `You are the follow-up strategist for Eric Weiscarger's MDRx Workers' Compensation Pharmacy Program. Eric partners with the MDRx360 team to bring physicians into a pharmacy dispensing program. You decide the SINGLE best next move for one lead based on their actual behavior, so Eric never has to think about follow-up timing or wording.
 
 Given the lead's behavior, return STRICT JSON only:
-{"recommended_date":"YYYY-MM-DD","channel":"email|call|text","angle":"short label of the approach","reason":"one line: why this move, why now, from their behavior","draft":"the message to send (for email/text) or 2-3 call talking points (for call)"}
+{"recommended_date":"YYYY-MM-DD","channel":"email|call|text","angle":"short label of the approach","reason":"one line: why this move, why now, from their behavior","draft":"the message to send (for email/text) or 2-3 call talking points (for call)","content_id":<the id of the story from news_angles you used, or null>}
 
 Timing logic (today is ${today}):
 - Just engaged / opened the tool / clicked in the last day or two: move fast, 1-2 days out.
@@ -47,6 +47,8 @@ SCHEDULING, for leads who have NOT yet started a conversation: the calendar has 
 STAGE, absolute. If stage is Engaged, Hot, Closing or Won, this lead is already in conversation with us, or his practice is. NEVER use talk_link for them. Asking a man whose practice manager has been on a call with us to fill in a form saying how to reach him throws the relationship away and reads as though nobody here remembers who he is. booking_link is DIFFERENT and is always welcome: it is not a pitch for a first call, it is where he picks a time, and it belongs in any email that offers time no matter what stage he is at. For these leads the move is the next real step: answer what was actually asked, send what was actually requested, confirm what was already discussed.
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
+
+NEWS. news_angles holds stories Eric has read and approved himself, already filtered to the ones that apply where this practice actually is. You may lead the email with ONE of them when it genuinely bears on this physician and what he has been looking at, and you must then return its id as content_id. Use the story to say something he did not already know, in your own words, never pasted. Do not reach for one just because it is there: an angle that does not fit is worse than no angle, and a second one in the same email turns a note into a newsletter. Never state a fact that is not in the story you were given, never name a court, a ruling or a number that is not there, and if news_angles is empty then simply write the email without any of this. Return content_id null when you use none.
 
 BOOKING. The email is written BY Eric, in the first person, so it says "I am easy to book with", never "Eric is easy to book with". You are drafting as him, and any sentence that talks about Eric in the third person is wrong on its face. Never name a time on the clock. Not "Tuesday at 10", not "10:15", not "between 9 and 11:30", not a range of any kind. open_slots holds whole blocks read off his calendar, like "Tuesday, open most of the day", and that is the most precise you are ever allowed to be. Name at most two of those days. Then give him both ways to answer, and ALWAYS BOTH: he can propose whatever time suits him, and he can pick one himself off Eric's calendar. The calendar is booking_link. Whenever you offer time you MUST put booking_link in the email, on a line of its own with nothing else on that line, which is what turns it into a button. An email that offers to meet without that link will be refused, and it deserves to be: it leaves the man to write back and ask where to go. Whatever he proposes or picks comes back with a calendar invitation and a Zoom link, so never promise to "send details over" afterwards and never ask him to confirm twice. If open_slots is empty, say plainly that Eric is wide open, ask what suits him, and still give the link.
 
@@ -206,6 +208,49 @@ function practiceDomain(email) {
 // Real openings from Eric's calendar, not times the model imagines. Proposing "Tuesday at 10am"
 // to a physician who says yes, when Eric is booked, is worse than sending no times at all: he has
 // to walk it back, and the one thing the follow-up was buying was the impression of being organized.
+// Stories Eric has read and approved, in mdrx_content_queue. Seven have sat there since before he
+// went away with used_count zero: approved and never once put in front of anybody.
+//
+// A story about the Pennsylvania Supreme Court is worth a great deal to a practice in Allentown and
+// nothing at all to one in Duluth, and sending it there says plainly that nobody looked. So a story
+// that names states belongs only to those states. One that does not name any, an FTC settlement, a
+// PBM consolidation figure, travels anywhere.
+const STATES = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO',
+  connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID',
+  illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',
+  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',
+  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',
+  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR',
+  pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+  tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA', washington: 'WA',
+  'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+};
+const statesNamedIn = (story) => {
+  const t = [story.headline, story.draft_hook, story.source_title, story.angle].join(' ').toLowerCase();
+  const found = new Set();
+  for (const [name, code] of Object.entries(STATES)) {
+    if (new RegExp(String.raw`\b${name}\b`).test(t)) found.add(code);
+  }
+  // "PA" alone is too easy to hit by accident, so only the full name counts.
+  return found;
+};
+async function approvedStoriesFor(state) {
+  const st = String(state || '').trim().toUpperCase();
+  const all = await sGet('mdrx_content_queue?select=id,kind,theme,headline,draft_hook,source_title,source_url,angle,used_count&status=eq.approved&order=used_count.asc,id.desc');
+  const fit = (all || []).filter((c) => {
+    const named = statesNamedIn(c);
+    if (!named.size) return true;                 // national, goes anywhere
+    if (!st) return false;                        // a state story needs to know where he is
+    return named.has(st);
+  });
+  // Least used first, so an approved story is not left sitting while one gets sent to everybody.
+  return fit.slice(0, 4).map((c) => ({
+    id: c.id, theme: c.theme, headline: c.headline, the_story: c.draft_hook, source: c.source_title,
+  }));
+}
+
 async function openSlots() {
   try {
     const r = await fetch('https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/booking-slots?type=intro');
@@ -248,7 +293,7 @@ async function main() {
   // Active pipeline leads worth a move: in Pipeline, not won/lost, due or freshly flagged.
   // on_hold means Eric took this lead off automation by hand. It was not checked here, so a lead
   // he had already pulled out kept getting drafted for, three times in a week.
-  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,credentials,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,manual_touch_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
+  const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,credentials,state,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,manual_touch_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
   const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
   const pending = new Set((openMoves || []).map((x) => x.provider_id));
 
@@ -344,6 +389,8 @@ async function main() {
       the_thread: thread,
       // Genuinely free, checked against the calendar at run time. Offer only from this list.
       open_slots: slots,
+      // Approved by Eric, and already narrowed to what applies where this practice actually is.
+      news_angles: await approvedStoriesFor(p.state),
     };
     // A lead who has written to us and not been answered does not get an automated follow-up. The
     // answer is a reply to what he actually said, and that is Eric's to write. Drafting over the
@@ -380,7 +427,17 @@ async function main() {
       console.error(`next-move: discarded a draft for ${p.last_name}: ${blocking.join(', ')}`);
       continue;
     }
-    await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending' });
+    // Only credit a story the model was actually offered. Asking it to report its own source is
+    // the cheapest way to know, and the cheapest way to be told the wrong thing, so the id is
+    // checked against what went in rather than trusted.
+    const offered = new Set((ctx.news_angles || []).map((a) => a.id));
+    const usedId = offered.has(Number(mv.content_id)) ? Number(mv.content_id) : null;
+    await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending', content_id: usedId });
+    if (usedId) {
+      const [cur] = await sGet(`mdrx_content_queue?select=used_count&id=eq.${usedId}`);
+      await sPatch(`mdrx_content_queue?id=eq.${usedId}`, { used_count: ((cur && cur.used_count) || 0) + 1 });
+      console.log(`next-move: ${p.last_name || p.email} leads on approved story ${usedId}`);
+    }
     // reflect the recommendation on the record so nothing sits with no plan
     // The flag has been answered: a move is planned against it. Leaving it up meant thirty six
     // records permanently reading "needs attention", which is the same as none of them doing so.
