@@ -72,7 +72,11 @@ Referral Management • Work Comp Pharmacy • Ancillary Coordination
 async function decide(ctx) {
   try {
     const m = await anthropic.messages.create({
-      model: 'claude-sonnet-5', max_tokens: 3000, system: SYSTEM,
+      // The model thinks before it answers, and thinking comes out of this budget. At 1600 and
+      // again at 3000 it spent the lot reasoning and returned nothing at all: stop=max_tokens with
+      // only thinking blocks and no text. The draft itself is a few hundred tokens; the headroom
+      // is for the thinking in front of it.
+      model: 'claude-sonnet-5', max_tokens: 8000, system: SYSTEM,
       messages: [{ role: 'user', content: 'Plan the next move for this lead:\n\n' + JSON.stringify(ctx) }],
     });
     let raw = ((m.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n') || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
