@@ -20,14 +20,13 @@ const BANNED = /own volume|favorable opinion in writing|what it comes to against
 const DISPENSING = /prohibit\w* (physicians )?from dispensing|dispens\w+ (in|at) (the|your) office|office dispensing|\b2014\b/i;
 // American spelling. The old list knew only the -ise verbs, so "programme" reached two queued
 // emails and "modelled" reached a live page before anyone caught them by eye.
-const BRITISH = new RegExp([
-  '\\b(authoris|organis|recognis|realis|analys|apologis|prioritis|minimis|maximis)\\w*',
-  '\\bprogramme\\b',
-  '\\b(modell|labell|cancell|travell|fuell|signall)(ed|ing)\\b',
-  '\\b(colour|behaviour|favour|honour|labour|flavour)\\w*',
-  '\\b(centre|licence|defence|offence|practise|enrolment|judgement)\\b',
-  '\\b(whilst|amongst|towards)\\b',
-].join('|'), 'i');
+// One literal rather than strings joined together: the escaping has to be right only once, and a
+// regex literal cannot be silently degraded by a stray backslash the way a string can.
+//
+// 'analys' was a stem too far. It matches "analysis", which is how American English spells it and
+// how both legal write-ups in touch 1 are described, so this rule refused every cold email for six
+// days while Eric was away. Only the British inflections are listed now.
+const BRITISH = /\b(authoris|organis|recognis|realis|apologis|prioritis|minimis|maximis)\w*|\banalys(e|es|ed|ing)\b|\bprogramme\b|\b(modell|labell|cancell|travell|fuell|signall)(ed|ing)\b|\b(colour|behaviour|favour|honour|labour|flavour)\w*|\b(centre|licence|defence|offence|practise|enrolment|judgement)\b|\b(whilst|amongst|towards)\b/i;
 const NAG = /checking in|circling back|following up on|touching base|any thoughts/i;
 const BLIND_TOKEN = /[?&]p=(&|"|'|\s|$)/;
 const URL_AS_TEXT = /<a\s[^>]*>\s*https?:\/\//i;
