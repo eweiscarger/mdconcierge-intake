@@ -48,6 +48,8 @@ STAGE, absolute. If stage is Engaged or Closing, this lead is already in convers
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
+ONLY OFFER TIMES FROM open_slots. Those are real openings read from Eric's calendar at the moment this was written. Never invent a time, never round one to sound tidier, never offer a day that is not in that list. Quote two or three of them, in Eastern time, exactly as given. If open_slots is empty, do not name any time: ask him what suits and say Eric will work around it. A physician who accepts a time Eric cannot make is worse off than one who was asked.
+
 WRITE TO WHAT WAS ACTUALLY SAID. the_thread holds the real correspondence, newest first, both what was sent to him and anything he sent back. Read it before you write a word. If Eric last sent him the formulary, the follow-up is about the formulary. If Eric wrote by hand about injection kits at his specific practice, the follow-up continues THAT, not a generic offer of a call. Anything marked "written by hand" is Eric choosing his own words for this person and matters more than any cadence touch. A follow-up that could have been sent to anyone on the list is a failed follow-up.
 
 DO NOT REFER BACK TO EARLIER EMAILS he never answered. "As I mentioned", "I said I would be back in touch", "the week I told you about" all assume he read and remembers a message he never replied to. He probably does not. Make the offer stand on its own: here are times, do any of them work. If the timing happens to line up with something Eric wrote before, that is a happy accident, not something to point at.
@@ -189,6 +191,24 @@ function practiceDomain(email) {
   return (FREE_MAIL.has(dom) || OUR_DOMAINS.has(dom)) ? null : dom;
 }
 
+// Real openings from Eric's calendar, not times the model imagines. Proposing "Tuesday at 10am"
+// to a physician who says yes, when Eric is booked, is worse than sending no times at all: he has
+// to walk it back, and the one thing the follow-up was buying was the impression of being organised.
+async function openSlots() {
+  try {
+    const r = await fetch('https://pjdbzrzadlldojuvdrfj.supabase.co/functions/v1/booking-slots?type=intro');
+    const j = await r.json();
+    const out = [];
+    for (const day of Object.keys(j.days || {}).sort()) {
+      // Two per day is enough to offer without turning the email into a timetable.
+      for (const s of (j.days[day] || []).slice(0, 8).filter((_, i) => i % 3 === 0).slice(0, 2)) {
+        out.push(s.label);
+      }
+    }
+    return out.slice(0, 6);
+  } catch (e) { console.error('could not read the calendar: ' + e.message); return []; }
+}
+
 async function main() {
   // Anything already recommended and now due goes into the approval queue first.
   const promoted = await promoteDueMoves();
@@ -226,6 +246,10 @@ async function main() {
       return (Number(b.funnel_score) || 0) - (Number(a.funnel_score) || 0);
     })
     .slice(0, PER_RUN);
+
+  const slots = await openSlots();
+  if (slots.length) console.log('next-move: offering real openings ' + slots.join(' | '));
+  else console.log('next-move: calendar unavailable, drafts will ask for their times instead');
 
   let queued = 0;
   for (const p of candidates) {
@@ -287,6 +311,8 @@ async function main() {
       // Newest first. Anything marked "written by hand" is Eric himself and carries more weight
       // than a cadence touch: he chose those words for this person.
       the_thread: thread,
+      // Genuinely free, checked against the calendar at run time. Offer only from this list.
+      open_slots: slots,
     };
     // A lead who has written to us and not been answered does not get an automated follow-up. The
     // answer is a reply to what he actually said, and that is Eric's to write. Drafting over the
