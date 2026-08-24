@@ -159,7 +159,7 @@ export function emailFaults(m) {
   // written for exactly those people and had it backwards: a man who walked up to the calendar
   // twice and did not book has told us the link is the obstacle. He gets times in the body.
   if (/^(engaged|hot|closing|won)$/i.test(String(m.stage || '').trim())
-      && /[?&](?:amp;)?to=(book|talk)/i.test(html + text)) {
+      && /[?&](?:amp;)?to=(book|talk)/i.test(html + text)) {
     f.push('offers a first call or a reach-me form to a lead who is past that');
   }
 
