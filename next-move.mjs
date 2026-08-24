@@ -275,6 +275,15 @@ async function main() {
 
     const mv = await decide(ctx);
     if (!mv) continue;
+    // Check the draft the moment it is written, not days later when it comes due. A bad
+    // recommendation that sits for a week is a bad recommendation Eric has to read and reject.
+    const everReplied = (replies || []).length > 0;
+    const draftFaults = emailFaults({ text: mv.draft, lastName: '', addressAs: '', neverReplied: !everReplied });
+    const blocking = draftFaults.filter((f) => /never happened|never answered|dash|British|tracking|banned/i.test(f));
+    if (blocking.length) {
+      console.error(`next-move: discarded a draft for ${p.last_name}: ${blocking.join(', ')}`);
+      continue;
+    }
     await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending' });
     // reflect the recommendation on the record so nothing sits with no plan
     // The flag has been answered: a move is planned against it. Leaving it up meant thirty six

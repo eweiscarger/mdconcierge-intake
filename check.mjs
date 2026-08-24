@@ -32,6 +32,10 @@ const NAG = /checking in|circling back|following up on|touching base|any thought
 // not a promise, and 'following up as promised' to a physician who has never replied invents
 // a relationship. Only refused when he has never written back.
 const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (conversation|call|discussion)|following up on our|as agreed|you asked me to|when we spoke|after our (call|conversation)|good (talking|speaking) (to|with) you/i;
+// Pointing back at an email he never answered. Softer than claiming a deal and just as wrong:
+// it assumes he read it and remembers. The model kept reaching for this after being told not
+// to, twice, which is why it is a rule and not a preference.
+const POINTS_BACK = /I mentioned|I had mentioned|I said I would|as planned|I told you|the (day|week) I (said|mentioned)|like I said|as I noted|my last (email|note) said/i;
 const BLIND_TOKEN = /[?&]p=(&|"|'|\s|$)/;
 const URL_AS_TEXT = /<a\s[^>]*>\s*https?:\/\//i;
 
@@ -137,6 +141,7 @@ export function emailFaults(m) {
   if (BRITISH.test(both)) f.push('British spelling');
   if (NAG.test(both)) f.push('banned follow-up phrase');
   if (m.neverReplied && CLAIMS_A_DEAL.test(both)) f.push('claims a conversation that never happened');
+  if (m.neverReplied && POINTS_BACK.test(both)) f.push('points back at an email he never answered');
 
   // Tracking that cannot work is worse than none: the click is dropped and the lead never moves.
   if (BLIND_TOKEN.test(html + text)) f.push('tracking token is empty');
