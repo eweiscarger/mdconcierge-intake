@@ -120,7 +120,7 @@ export function emailFaults(m) {
   const addressAs = String(m.addressAs || '').trim();
   const last = String(m.lastName || '').trim();
   if (addressAs) {
-    const want = new RegExp('^(?:(?:hi|hello|dear|good (?:morning|afternoon|evening))[,]?\\s+)?'
+    const want = new RegExp('^(?:(?:hi|hey|hello|dear|good (?:morning|afternoon|evening|day)|morning|afternoon)[,]?\\s+)?'
       + addressAs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ',', 'i');
     if (text.trim() && !want.test(text.trim())) f.push('plain text does not open on the greeting');
     if (html.trim() && !want.test(vis)) f.push('designed email does not open on the greeting');
@@ -130,7 +130,7 @@ export function emailFaults(m) {
     // "Hi Dr. Dempsey," is a greeting. The rule was written against the cold templates, which open
     // on a bare surname, and it held six correctly addressed follow-ups for saying hello first.
     // What matters is that he is named as a physician before anything else, not the exact opener.
-    const want = new RegExp('^(?:(?:hi|hello|dear|good (?:morning|afternoon|evening))[,]?\\s+)?Dr\\. '
+    const want = new RegExp('^(?:(?:hi|hey|hello|dear|good (?:morning|afternoon|evening|day)|morning|afternoon)[,]?\\s+)?Dr\\. '
       + last.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ',', 'i');
     if (text.trim() && !want.test(text.trim())) f.push('plain text does not open on the greeting');
     if (html.trim() && !want.test(vis)) f.push('designed email does not open on the greeting');
