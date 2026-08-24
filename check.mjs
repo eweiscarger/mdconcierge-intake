@@ -46,7 +46,7 @@ const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (convers
 // so "8 to 5" and "570 817 7569" pass, and not matching a date.
 // The language of offering to meet. Kept to phrases that only appear when time is being offered,
 // so a passing mention of a call in a different sort of email does not demand a booking link.
-const OFFERS_TO_MEET = /\bopen (?:most of the day|in the morning|in the afternoon)\b|\b(?:pick|choose|grab) a time\b|\bwhatever time suits\b|\btime that suits\b|\bpropose a time\b|\bmy calendar\b/i;
+const OFFERS_TO_MEET = /\bopen (?:most of the day|in the morning|in the afternoon)\b|\b(?:pick|choose|grab) a time\b|\bwhatever time suits\b|\btime that suits\b|\bpropose a time\b|\b(?:here is|here's|off|from) my calendar\b/i;
 // "Eric is", "Eric will", "Eric has". Not "Eric Weiscarger" in the signature, and not a possessive
 // like "Eric's calendar", which is how a person does refer to their own diary in writing.
 const THIRD_PERSON_ERIC = /\bEric\s+(?:is|was|will|would|can|could|has|had|does|did|wants|prefers|thinks|said|asked|works|runs)\b/i;
