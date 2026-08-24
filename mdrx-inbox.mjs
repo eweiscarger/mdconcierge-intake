@@ -175,7 +175,16 @@ async function main() {
       if (NOISE.test(fromAddr) || fromAddr === 'referrals@mdconcierge.net' || fromAddr === 'eric@mdconcierge.net') continue;
       const prov = byEmail[fromAddr];
       const isTeam = TEAM.test(fromAddr);
-      const isMdrx = isTeam || prov || /mdrx|workers.?comp|workers compensation|pharmacy program/i.test(subject);
+      // What counts as our mail. The old test looked for "workers comp" and Jackie Tillou writes
+      // "Workcomp", one word, in every introduction she makes. Amanda Dowdy of Bone & Joint
+      // Institute of South Georgia replied to one on 20 August and this line dropped her on the
+      // floor: no record, no draft, no trace anywhere, and she sat waiting four days.
+      //
+      // Referrers are named explicitly. A introduction from someone who sends us business is the
+      // single most valuable email that arrives here, and it must never depend on a subject line.
+      const REFERRERS = /@(mountainvalleyortho|mdrx360|therapointmedical)\.com$/i;
+      const OURS = /mdrx|work\s?comp|workers.?comp|workers compensation|pharmacy program|injection kit|ancillar|DME/i;
+      const isMdrx = isTeam || prov || REFERRERS.test(fromAddr) || OURS.test(subject) || OURS.test(String(bodyText || '').slice(0, 2000));
       if (!isMdrx) continue;
 
       let bodyText = '';
