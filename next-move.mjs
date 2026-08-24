@@ -72,12 +72,18 @@ Referral Management • Work Comp Pharmacy • Ancillary Coordination
 async function decide(ctx) {
   try {
     const m = await anthropic.messages.create({
-      model: 'claude-sonnet-5', max_tokens: 1600, system: SYSTEM,
+      model: 'claude-sonnet-5', max_tokens: 3000, system: SYSTEM,
       messages: [{ role: 'user', content: 'Plan the next move for this lead:\n\n' + JSON.stringify(ctx) }],
     });
     let raw = ((m.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n') || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     const s = raw.indexOf('{'), e = raw.lastIndexOf('}');
-    if (s < 0 || e < 0) { console.error('no json: ' + raw.slice(0, 120)); return null; }
+    if (s < 0 || e < 0) {
+      // Say why it came back unusable rather than printing an empty string. An empty response and
+      // a truncated one need opposite fixes, and 'no json:' told us which was happening: neither.
+      console.error(`no json: stop=${m.stop_reason} blocks=${(m.content || []).map((c) => c.type).join(',') || 'none'}`
+        + ` in=${m.usage?.input_tokens} out=${m.usage?.output_tokens} raw="${raw.slice(0, 200)}"`);
+      return null;
+    }
     const o = JSON.parse(raw.slice(s, e + 1));
     if (!o.draft || !o.recommended_date) return null;
     if (o.recommended_date < today) o.recommended_date = today;
