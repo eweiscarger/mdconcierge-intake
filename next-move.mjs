@@ -318,8 +318,17 @@ async function main() {
     // answer is a reply to what he actually said, and that is Eric's to write. Drafting over the
     // top of it is how a physician gets a generic nudge two days after asking a direct question.
     const newestReply = (replies || [])[0];
+    // Against what we actually sent, not against a cached field. last_touch_at was being stamped
+    // backwards by the sent-folder scan, so a physician who had been answered twice still read as
+    // waiting and was skipped every run.
+    const answeredAt = Math.max(
+      Date.parse(String(p.last_touch_at || '')) || 0,
+      ...(sentMail || []).map((m) => Date.parse(String(m.sent_at || '')) || 0),
+      ...(handMail || []).filter((m) => m.direction === 'out')
+        .map((m) => Date.parse(String(m.sent_at || '')) || 0),
+    );
     const unanswered = newestReply
-      && (!p.last_touch_at || new Date(newestReply.received_at) > new Date(p.last_touch_at));
+      && (Date.parse(String(newestReply.received_at || '')) || 0) > answeredAt;
     if (unanswered) {
       console.log(`next-move: ${p.last_name} has an unanswered reply from ${newestReply.from_name || newestReply.from_addr} (${String(newestReply.received_at).slice(0, 10)}). No draft; it needs a real answer.`);
       await sPatch(`mdrx_providers?id=eq.${p.id}`, {
