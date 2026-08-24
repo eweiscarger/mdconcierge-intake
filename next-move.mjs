@@ -48,6 +48,8 @@ STAGE, absolute. If stage is Engaged or Closing, this lead is already in convers
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
 
+WRITE TO WHAT WAS ACTUALLY SAID. the_thread holds the real correspondence, newest first, both what was sent to him and anything he sent back. Read it before you write a word. If Eric last sent him the formulary, the follow-up is about the formulary. If Eric wrote by hand about injection kits at his specific practice, the follow-up continues THAT, not a generic offer of a call. Anything marked "written by hand" is Eric choosing his own words for this person and matters more than any cadence touch. A follow-up that could have been sent to anyone on the list is a failed follow-up.
+
 DO NOT REFER BACK TO EARLIER EMAILS he never answered. "As I mentioned", "I said I would be back in touch", "the week I told you about" all assume he read and remembers a message he never replied to. He probably does not. Make the offer stand on its own: here are times, do any of them work. If the timing happens to line up with something Eric wrote before, that is a happy accident, not something to point at.
 
 NEVER CLAIM A CONVERSATION THAT DID NOT HAPPEN. Most of these physicians have never replied to Eric. Saying he would be available in a cold email is not a promise and not an agreement. Do not write "as promised", "as discussed", "as agreed", "following up on our call", "when we spoke", or anything implying a prior exchange, unless their_replies actually shows they wrote to us. If they have never replied, the email opens on the offer itself, not on a relationship. Offering times is welcome; pretending they were owed is not.
@@ -225,7 +227,11 @@ async function main() {
 
   let queued = 0;
   for (const p of candidates) {
-    const [events, replies, quotes, acts] = await Promise.all([
+    // The words that actually passed between them. Behaviour says he looked; only the thread says
+    // what he was looking at and what Eric last told him. Without this the agent writes a generic
+    // "here are some times" to a man who was last sent a formulary and a legal summary, and the
+    // follow-up reads as though nobody remembers what was sent.
+    const [events, replies, quotes, acts, sentMail, handMail] = await Promise.all([
       sGet(`mdrx_funnel_events?select=event,page,link,cta,scroll,seconds,created_at&provider_id=eq.${p.id}&order=created_at.desc&limit=15`),
       (() => {
         const dom = practiceDomain(p.email);
@@ -236,7 +242,26 @@ async function main() {
       })(),
       sGet(`quote_links?select=view_count,first_viewed_at,last_viewed_at&provider_id=eq.${p.id}`),
       sGet(`mdrx_activity?select=type,subject,notes,occurred_at&provider_id=eq.${p.id}&order=occurred_at.desc&limit=5`),
+      // What the machine sent him, in full.
+      sGet(`mdrx_outbox?select=subject,body_text,sent_at&provider_id=eq.${p.id}&status=eq.sent&order=sent_at.desc&limit=4`),
+      // What Eric sent him with his own hands, which is usually the more important half.
+      sGet(`mdrx_messages?select=direction,subject,body_text,sent_at,from_name&provider_id=eq.${p.id}&order=sent_at.desc&limit=6`),
     ]);
+    // One thread, newest first, so the model reads it the way a person would.
+    const strip = (t) => String(t || '')
+      .replace(/If you aren't interested[\s\S]*$/i, '')      // the opt-out is not conversation
+      .replace(/Best,[\s\S]*$/i, '')                          // nor is the signature block
+      .replace(/https?:\/\/\S+/g, '[link]')
+      .replace(/\s+/g, ' ').trim();
+    const thread = [
+      ...(sentMail || []).map((m) => ({ when: m.sent_at, who: 'Eric, automated', subject: m.subject, said: strip(m.body_text) })),
+      ...(handMail || []).map((m) => ({ when: m.sent_at,
+        who: m.direction === 'in' ? (m.from_name || 'them') : 'Eric, written by hand',
+        subject: m.subject, said: strip(m.body_text) })),
+    ].filter((m) => m.said)
+     .sort((a, b) => String(b.when).localeCompare(String(a.when)))
+     .slice(0, 6)
+     .map((m) => ({ ...m, said: m.said.slice(0, 700) }));
     const ctx = {
       name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), last_name: p.last_name,
       // Administrators and managers come in through referrals and are not physicians.
@@ -257,6 +282,9 @@ async function main() {
       their_replies: (replies || []).map((r) => ({ from: r.from_name || r.from_addr, said: r.snippet, subject: r.subject, sentiment: r.sentiment, when: r.received_at })),
       tool_views: (quotes || []).map((q) => ({ views: q.view_count, first: q.first_viewed_at, last: q.last_viewed_at })),
       logged_touches: acts || [],
+      // Newest first. Anything marked "written by hand" is Eric himself and carries more weight
+      // than a cadence touch: he chose those words for this person.
+      the_thread: thread,
     };
     // A lead who has written to us and not been answered does not get an automated follow-up. The
     // answer is a reply to what he actually said, and that is Eric's to write. Drafting over the
