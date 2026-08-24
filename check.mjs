@@ -39,6 +39,9 @@ const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (convers
 // was away, was not waiting, and does not care. Announcing a return implies he was.
 // A time on the clock: "10am", "2 pm", "10:30", "at 4". Deliberately not matching a bare number,
 // so "8 to 5" and "570 817 7569" pass, and not matching a date.
+// The language of offering to meet. Kept to phrases that only appear when time is being offered,
+// so a passing mention of a call in a different sort of email does not demand a booking link.
+const OFFERS_TO_MEET = /\bopen (?:most of the day|in the morning|in the afternoon)\b|\b(?:pick|choose|grab) a time\b|\bwhatever time suits\b|\btime that suits\b|\bpropose a time\b|\bmy calendar\b/i;
 const CLOCK_TIME = /\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?(?!\d)|\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i;
 const ANNOUNCES_A_RETURN = /i'?m back|i am back|now that i'?m back|back from (my|a) |while i was away|before i went away|on my return|back in the office|returned from/i;
 const POINTS_BACK = /I mentioned|I had mentioned|I said I would|as planned|I told you|the (day|week) I (said|mentioned)|like I said|as I noted|my last (email|note) said/i;
@@ -169,9 +172,21 @@ export function emailFaults(m) {
   // earlier and used neither, offered him both again. The carve-out that used to allow that was
   // written for exactly those people and had it backwards: a man who walked up to the calendar
   // twice and did not book has told us the link is the obstacle. He gets times in the body.
+  // Offering to meet and not saying where to pick a time leaves the man to write back and ask. Eric
+  // has had to say this more times than it is worth: if the email offers time, the calendar link
+  // goes in it. Wanting it on its own line so it renders as a button is a matter for the drafter;
+  // this only insists it is there at all.
+  if (OFFERS_TO_MEET.test(both) && !/[?&](?:amp;)?to=book\b/i.test(html + text)) {
+    f.push('offers to meet without giving him the calendar link');
+  }
+  // The reach-me form asks a man in mid conversation how to get hold of him. That stays refused.
+  // The CALENDAR does not: an email that offers to meet has to hand him the link, whatever stage he
+  // is at, and this rule used to strip it from exactly the people closest to booking. Blocking a
+  // link that says "or pick a time yourself" was never what Eric asked for. He asked to stop
+  // pitching a first call to someone already talking to us.
   if (/^(engaged|hot|closing|won)$/i.test(String(m.stage || '').trim())
-      && /[?&](?:amp;)?to=(book|talk)/i.test(html + text)) {
-    f.push('offers a first call or a reach-me form to a lead who is past that');
+      && /[?&](?:amp;)?to=talk\b/i.test(html + text)) {
+    f.push('offers a reach-me form to a lead who is already talking to us');
   }
 
   // A button has to say where it goes. "See the details" was the fallback label for any destination
