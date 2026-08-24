@@ -154,12 +154,12 @@ export function emailFaults(m) {
   // A lead who is already in conversation does not get asked to book a first call or to fill in a
   // form saying how to reach him. His practice manager has been on a Zoom with us. Sending him the
   // opening move again reads as though nobody here remembers who he is.
-  // One exception, and only one: a lead who went to the booking page and did not book. Sending him
-  // back to finish what he started is not the same as asking a man mid-conversation to book a first
-  // call, and the rule without this carve-out silenced exactly the people showing booking intent.
-  const midBooking = /booking_nudge/i.test(String(m.behaviorFlag || ''));
-  if (/^(engaged|closing|won)$/i.test(String(m.stage || '').trim()) && !midBooking
-      && /[?&](?:amp;)?to=(book|talk)\b/i.test(html + text)) {
+  // Hot belongs in that list too. A draft to Dr. Jacoby, who had clicked both links twelve days
+  // earlier and used neither, offered him both again. The carve-out that used to allow that was
+  // written for exactly those people and had it backwards: a man who walked up to the calendar
+  // twice and did not book has told us the link is the obstacle. He gets times in the body.
+  if (/^(engaged|hot|closing|won)$/i.test(String(m.stage || '').trim())
+      && /[?&](?:amp;)?to=(book|talk)/i.test(html + text)) {
     f.push('offers a first call or a reach-me form to a lead who is past that');
   }
 
