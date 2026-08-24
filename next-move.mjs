@@ -150,10 +150,12 @@ async function promoteDueMoves() {
     // subject, so left in it would print "Subject: A couple of times this week" above the greeting.
     const draft = String(mv.draft || '').replace(/^[ \t]*subject:[^\n]*\n+/i, '').trim();
     if (!draft) continue;
-    // The card injected the opt-out and the plain text did not, so every drafted follow-up failed
-    // the gate on arrival and sat in the queue as held. Both halves carry it, same wording.
-    const text = draft + '\n\n' + optOutLine(`${SITE}/unsubscribe.html?p=${p.funnel_token || ''}`);
-    const html = draftToCard(draft, p);
+    // These are not marketing. A follow-up Eric sends to one physician he is talking to gets no
+    // unsubscribe line and no campaign card: an opt-out at the bottom announces the email as a
+    // mailshot, which is untrue and is the impression a letter exists to avoid. The sender renders
+    // it as a letter with his real signature, so nothing is built here.
+    const text = draft;
+    const html = '';
     // A draft is written by a model, so it is exactly the thing that has to be checked before it
     // reaches Eric's queue. The recommendation stays pending and says why, rather than queueing
     // something he then has to notice is wrong.
@@ -164,7 +166,7 @@ async function promoteDueMoves() {
     const faults = emailFaults({ html, text,
       lastName: isStaff ? '' : p.last_name,
       addressAs: isStaff ? (p.first_name || p.last_name || '') : '',
-      toEmail: p.email, stage: p.funnel_stage, neverReplied: replyCount === 0 });
+      toEmail: p.email, stage: p.funnel_stage, neverReplied: replyCount === 0, campaign: false });
     if (faults.length) {
       console.error(`next-move: refused to queue move ${mv.id} for ${p.email}: ${faults.join(', ')}`);
       await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, {
@@ -178,7 +180,7 @@ async function promoteDueMoves() {
       provider_id: p.id, touch_no: 0, to_email: p.email, subject: SUBJECT,
       body_text: text, body_html: html,
       status: 'pending', scheduled_date: today,
-      objective: mv.angle || null, template_key: 'next_move', channel: 'email',
+      objective: mv.angle || null, template_key: 'personal', channel: 'email',
     });
     await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, { status: 'queued', resolved_at: new Date().toISOString() });
     already.add(p.id);
@@ -372,7 +374,7 @@ async function main() {
     // Check the draft the moment it is written, not days later when it comes due. A bad
     // recommendation that sits for a week is a bad recommendation Eric has to read and reject.
     const everReplied = (replies || []).length > 0;
-    const draftFaults = emailFaults({ text: mv.draft, lastName: '', addressAs: '', neverReplied: !everReplied });
+    const draftFaults = emailFaults({ text: mv.draft, lastName: '', addressAs: '', neverReplied: !everReplied, campaign: false });
     const blocking = draftFaults.filter((f) => /never happened|never answered|dash|British|tracking|banned/i.test(f));
     if (blocking.length) {
       console.error(`next-move: discarded a draft for ${p.last_name}: ${blocking.join(', ')}`);
