@@ -52,8 +52,14 @@ const CADENCE_SUBJECTS = [
   /Pharmacy overview you asked for/i,
   /Pennsylvania Supreme Court Confirms Physicians May Have a Financial Interest/i,
 ];
+// Campaign mail is filed away. Mail to someone Eric is in conversation with stays in Sent, where
+// the rest of that thread is: the sender marks it "conversation" rather than "cadence" precisely
+// so this job leaves it alone. Filing it away meant a reply to an engaged physician vanished from
+// the folder Eric looks in.
 function isAutomated(subject, headerBlob) {
-  if (/x-mdc-auto/i.test(headerBlob || '')) return true;
+  const blob = String(headerBlob || '');
+  if (/x-mdc-auto:\s*conversation/i.test(blob)) return false;
+  if (/x-mdc-auto/i.test(blob)) return true;
   return CADENCE_SUBJECTS.some((re) => re.test(subject));
 }
 
