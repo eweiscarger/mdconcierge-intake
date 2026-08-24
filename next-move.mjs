@@ -202,7 +202,14 @@ async function main() {
       return true;
     })
     .filter((p) => !p.funnel_next_date || p.funnel_next_date <= today || p.behavior_flag)
-    .sort((a, b) => (Number(b.funnel_score) || 0) - (Number(a.funnel_score) || 0))
+    // Anyone carrying a behaviour flag has done something and is waiting on a response to it, so
+    // they go first. Sorting by score alone meant a flagged lead sitting at position twenty seven
+    // never came up: the run took the top ten by score, every run, and the tail was never worked.
+    .sort((a, b) => {
+      const fa = a.behavior_flag ? 1 : 0, fb = b.behavior_flag ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return (Number(b.funnel_score) || 0) - (Number(a.funnel_score) || 0);
+    })
     .slice(0, PER_RUN);
 
   let queued = 0;
@@ -256,7 +263,15 @@ async function main() {
     if (!mv) continue;
     await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending' });
     // reflect the recommendation on the record so nothing sits with no plan
-    await sPatch(`mdrx_providers?id=eq.${p.id}`, { next_step: mv.angle || p.next_step, funnel_next_date: mv.recommended_date });
+    // The flag has been answered: a move is planned against it. Leaving it up meant thirty six
+    // records permanently reading "needs attention", which is the same as none of them doing so.
+    // The behaviour is still on the timeline; only the outstanding-work marker comes down.
+    await sPatch(`mdrx_providers?id=eq.${p.id}`, {
+      next_step: mv.angle || p.next_step,
+      funnel_next_date: mv.recommended_date,
+      behavior_flag: null,
+      needs_attention: false,
+    });
     queued++;
   }
   console.log(`next-move: considered ${candidates.length}, queued ${queued} recommendation(s).`);
