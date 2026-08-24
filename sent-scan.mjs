@@ -55,7 +55,7 @@ const iso = (d) => new Date(d).toISOString();
 const addDays = (d, n) => new Date(new Date(d).getTime() + n * 86400000);
 
 async function main() {
-  const leads = await sGet('mdrx_providers?select=id,first_name,last_name,email,practice_name,funnel_stage,behavior_flag&email=not.is.null');
+  const leads = await sGet('mdrx_providers?select=id,first_name,last_name,email,practice_name,funnel_stage,behavior_flag,last_touch_at&email=not.is.null');
   const byEmail = new Map();
   const byDomain = new Map();
   for (const p of leads || []) {
@@ -138,11 +138,16 @@ async function main() {
 
   // One update per lead, from their most recent hand-sent message.
   for (const { lead, when, how } of touched.values()) {
+    // last_touch_at only ever moves forward. This job runs hourly and was stamping the date of the
+    // hand-sent mail over it every time, so a lead Eric wrote to on the 10th and the cadence emailed
+    // on the 14th read as last touched on the 10th, for ever. Everything that asks "has he heard
+    // from us since he wrote" then answered no, and the follow-up agent skipped her as still waiting.
+    const prior = Date.parse(String(lead.last_touch_at || '')) || 0;
     const patch = {
       manual_touch_at: iso(when),
-      last_touch_at: iso(when),
       funnel_next_date: addDays(when, PAUSE_DAYS).toISOString().slice(0, 10),
     };
+    if (new Date(when).getTime() > prior) patch.last_touch_at = iso(when);
     // He answered. The lead is no longer waiting on us.
     if (/waiting on us/i.test(String(lead.behavior_flag || ''))) patch.behavior_flag = null;
     await sPatch(`mdrx_providers?id=eq.${lead.id}`, patch);
