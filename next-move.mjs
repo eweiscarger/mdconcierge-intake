@@ -30,7 +30,7 @@ const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v
 const SYSTEM = `You are the follow-up strategist for Eric Weiscarger's MDRx Workers' Compensation Pharmacy Program. Eric partners with the MDRx360 team to bring physicians into a pharmacy dispensing program. You decide the SINGLE best next move for one lead based on their actual behavior, so Eric never has to think about follow-up timing or wording.
 
 Given the lead's behavior, return STRICT JSON only:
-{"recommended_date":"YYYY-MM-DD","channel":"email|call|text","angle":"short label of the approach","reason":"one line: why this move, why now, from their behavior","draft":"the message to send (for email/text) or 2-3 call talking points (for call)","content_id":<the id of the story from news_angles you used, or null>}
+{"recommended_date":"YYYY-MM-DD","channel":"email|call|text","angle":"short label of the approach","reason":"one line: why this move, why now, from their behavior","draft":"the message to send (for email/text) or 2-3 call talking points (for call)","content_id":<the id of the story from news_angles you used, or null>,"subject":"the subject line"}
 
 Timing logic (today is ${today}):
 - Just engaged / opened the tool / clicked in the last day or two: move fast, 1-2 days out.
@@ -47,6 +47,8 @@ SCHEDULING, for leads who have NOT yet started a conversation: the calendar has 
 STAGE, absolute. If stage is Engaged, Hot, Closing or Won, this lead is already in conversation with us, or his practice is. NEVER use talk_link for them. Asking a man whose practice manager has been on a call with us to fill in a form saying how to reach him throws the relationship away and reads as though nobody here remembers who he is. booking_link is DIFFERENT and is always welcome: it is not a pitch for a first call, it is where he picks a time, and it belongs in any email that offers time no matter what stage he is at. For these leads the move is the next real step: answer what was actually asked, send what was actually requested, confirm what was already discussed.
 
 THEIR REPLIES come first. their_replies holds what this lead and his practice actually wrote to us, and the practice manager or PA writing on his behalf IS this lead replying. Read them before anything else and write to what they said. Never draft a message that ignores an open question they put to us.
+
+SUBJECT. Return a "subject". If reply_subject is set, this physician is already on a thread with Eric and your subject MUST be exactly reply_subject, unchanged, so the email lands in the conversation he remembers instead of arriving as something new. Only when reply_subject is empty do you write your own, and then keep it short, specific to him, and never a campaign headline about another state.
 
 NEWS. news_angles holds stories Eric has read and approved himself, already filtered to the ones that apply where this practice actually is. You may lead the email with ONE of them when it genuinely bears on this physician and what he has been looking at, and you must then return its id as content_id. Use the story to say something he did not already know, in your own words, never pasted. Do not reach for one just because it is there: an angle that does not fit is worse than no angle, and a second one in the same email turns a note into a newsletter. Never state a fact that is not in the story you were given, never name a court, a ruling or a number that is not there, and if news_angles is empty then simply write the email without any of this. Return content_id null when you use none.
 
@@ -102,7 +104,6 @@ async function decide(ctx) {
 // comes due, the drafted email is rendered into the same card every other email uses and dropped
 // into mdrx_outbox alongside the cold touches, so there is one screen to review and approve.
 // Nothing sends. The subject follows COPY-RULES: Touch 1's subject unless Eric names another.
-const SUBJECT = 'PA Court Opens Up Significant Revenue Opportunity for Physicians';
 const ENGAGED_HTML = readFileSync(new URL('./email-templates/engaged.html', import.meta.url), 'utf8');
 const SIGNATURE_HTML = readFileSync(new URL('./email-templates/signature.html', import.meta.url), 'utf8');
 const SITE = 'https://mdconcierge.net';
@@ -135,7 +136,7 @@ function draftToCard(draft, p) {
 }
 
 async function promoteDueMoves() {
-  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
+  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft,subject&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
   if (!due || !due.length) return 0;
   // One pending email per physician. Two in the queue for the same doctor is how he gets two.
   const open = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
@@ -179,7 +180,7 @@ async function promoteDueMoves() {
       continue;
     }
     await sPost('mdrx_outbox', {
-      provider_id: p.id, touch_no: 0, to_email: p.email, subject: SUBJECT,
+      provider_id: p.id, touch_no: 0, to_email: p.email, subject: await subjectFor(p, mv),
       body_text: text, body_html: html,
       status: 'pending', scheduled_date: today,
       objective: mv.angle || null, template_key: 'personal', channel: 'email',
@@ -236,6 +237,22 @@ const statesNamedIn = (story) => {
   // "PA" alone is too easy to hit by accident, so only the full name counts.
   return found;
 };
+// SUBJECT was one stock campaign headline stamped on every follow-up the engine sent. Justin Gulden
+// came in through an introduction from Jackie and has never had a cold email from us, and he was
+// about to receive "PA Court Opens Up Significant Revenue Opportunity for Physicians": the wrong
+// state, and a headline from a campaign he was never on, sitting on top of a conversation he had
+// already started. A follow-up belongs on the thread it follows.
+async function subjectFor(p, mv) {
+  if (String(mv.subject || '').trim()) return mv.subject.trim();
+  // Whatever this conversation is actually called. His own words first, then ours.
+  const [hand] = await sGet(`mdrx_messages?select=subject,sent_at&provider_id=eq.${p.id}&subject=not.is.null&order=sent_at.desc&limit=1`);
+  const [past] = await sGet(`mdrx_outbox?select=subject,id&provider_id=eq.${p.id}&status=eq.sent&subject=not.is.null&order=id.desc&limit=1`);
+  const prior = String((hand && hand.subject) || (past && past.subject) || '').trim();
+  if (prior) return /^re:/i.test(prior) ? prior : 'Re: ' + prior;
+  // Nobody has written to him yet. A plain line about the thing itself, not a campaign headline.
+  return 'The work comp pharmacy program';
+}
+
 async function approvedStoriesFor(state) {
   const st = String(state || '').trim().toUpperCase();
   const all = await sGet('mdrx_content_queue?select=id,kind,theme,headline,draft_hook,source_title,source_url,angle,used_count&status=eq.approved&order=used_count.asc,id.desc');
@@ -364,6 +381,15 @@ async function main() {
      .sort((a, b) => String(b.when).localeCompare(String(a.when)))
      .slice(0, 6)
      .map((m) => ({ ...m, said: m.said.slice(0, 700) }));
+    // A follow-up to a physician Eric has already written to belongs ON that thread, under its
+    // subject, so it lands in the conversation he remembers rather than arriving as a new email
+    // about something else. The queue was putting a stock campaign subject on these: Justin Gulden
+    // in Duluth was about to get one headed "PA Court Opens Up Significant Revenue Opportunity",
+    // which is the wrong state and the wrong conversation at once.
+    const lastSubject = (thread.find((m) => String(m.subject || '').trim()) || {}).subject || '';
+    const replySubject = lastSubject
+      ? (/^re:/i.test(lastSubject.trim()) ? lastSubject.trim() : 'Re: ' + lastSubject.trim())
+      : '';
     const ctx = {
       name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), last_name: p.last_name,
       // Administrators and managers come in through referrals and are not physicians.
@@ -391,6 +417,8 @@ async function main() {
       open_slots: slots,
       // Approved by Eric, and already narrowed to what applies where this practice actually is.
       news_angles: await approvedStoriesFor(p.state),
+      // The thread this belongs on, if there is one.
+      reply_subject: replySubject,
     };
     // A lead who has written to us and not been answered does not get an automated follow-up. The
     // answer is a reply to what he actually said, and that is Eric's to write. Drafting over the
@@ -432,7 +460,10 @@ async function main() {
     // checked against what went in rather than trusted.
     const offered = new Set((ctx.news_angles || []).map((a) => a.id));
     const usedId = offered.has(Number(mv.content_id)) ? Number(mv.content_id) : null;
-    await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending', content_id: usedId });
+    // Where there is a thread, its subject wins outright. Asking the model to copy it exactly is
+    // asking for a paraphrase eventually, and a paraphrased subject starts a new thread.
+    const subject = replySubject || String(mv.subject || '').trim() || null;
+    await sPost('mdrx_next_moves', { provider_id: p.id, recommended_date: mv.recommended_date, channel: mv.channel || 'email', angle: mv.angle || null, reason: mv.reason || null, draft: mv.draft, status: 'pending', content_id: usedId, subject });
     if (usedId) {
       const [cur] = await sGet(`mdrx_content_queue?select=used_count&id=eq.${usedId}`);
       await sPatch(`mdrx_content_queue?id=eq.${usedId}`, { used_count: ((cur && cur.used_count) || 0) + 1 });
