@@ -184,14 +184,14 @@ function touchBody(touch, p, hook) {
   if (touch === 3) {
     return `${to}\n\nTwo notes ago I sent you the June ruling on work comp prescriptions. This one covers how work comp pharmacy is actually reimbursed in Pennsylvania, since that is what determines whether any of it is worth a practice's attention.\n\nPennsylvania reimburses work comp pharmacy at average wholesale price plus ten percent. That is set by the state fee schedule, not negotiated, and it is materially better than what commercial plans pay.\n\nIt is entirely mail order. The medication goes to the patient at home, next day, at no cost to them, and there are no denials while the claim is open. Nothing is stocked in your office and your staff handles none of it.\n\nOver 400 providers are running this now. What it comes to for any given practice depends on how much work comp you actually see, and [the overview](https://mdconcierge.net/brief.html?p=${t}) walks through that.` + optout + sig;
   }
-  return `${to}\n\nLast note from me on this, and it is the one about limits, because you should hear them from me rather than find them later.\n\nThis is workers compensation only. It does not extend to Medicare, Medicaid or any federal program, and it does not extend to laboratory work, where a different federal statute applies.\n\nSo if work comp is not a real part of your practice, none of this was ever relevant and that is a perfectly good answer.\n\n${routingAsk(p).trim()}\n\nIf it is relevant and the timing was simply wrong, I am easy to find, and [everything stays where it is](https://mdconcierge.net/brief.html?p=${t}).` + optout + sig;
+  return `${to}\n\nLast note from me, and I would rather tell you where this does not reach than let you find it later.\n\nIt is workers compensation only. Not Medicare, not Medicaid, not any federal program, and not laboratory work, where a different federal statute applies. If work comp is not a real part of your practice, none of this was ever relevant and that is a perfectly good answer.\n\nWhere it is relevant, here is what it looks like. Over 400 providers are running it now. They prescribe exactly as they did before, nothing is stocked in the office, and the medication ships to the patient at home overnight at no cost to them. Pennsylvania pays at average wholesale price plus ten percent, set by the state fee schedule rather than negotiated with a carrier.\n\n${routingAsk(p).trim()}\n\nWhat it comes to depends on how much work comp you see, and [the overview](https://mdconcierge.net/brief.html?p=${t}) puts your own numbers into it.` + optout + sig;
 }
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
 // as a press release, which is what it was.
 const SUBJECTS = {
   1: "PA Court OKs Rx Revenue for Work Comp",
-  2: "what the ruling changed",
-  3: "the numbers behind it",
+  2: "What the PA Court Actually Held",
+  3: "Where Compliant Work Comp Revenue Comes From",
   4: "where this does not apply",
 };
 
