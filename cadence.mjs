@@ -166,6 +166,7 @@ function routingAsk(p) {
 // being scored. The later touches carry the full https URL so every client makes them clickable,
 // and the visible text is the destination, so nothing can read as cloaked.
 function touchBody(touch, p, hook) {
+  const t = p.funnel_token || '';
   const staff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
   const to = staff ? `${p.first_name || ''},`.trim() : `Dr. ${p.last_name || ''},`.trim();
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
@@ -176,10 +177,10 @@ function touchBody(touch, p, hook) {
     return `${to}\n\n${lead}In June the Pennsylvania Supreme Court decided a case called 700 Pharmacy. It is worth two minutes of your time if you treat injured workers.\n\nThe anti-referral provision in the Workers Compensation Act lists eight services a physician cannot refer to himself. The Court held, five to two, that the list means what it says. Prescription drugs are not on it.\n\nSo the question of what a practice may do with its work comp prescriptions is now settled in a way it was not before.\n\nWhere do yours go at the moment?` + optout + sig;
   }
   if (touch === 2) {
-    return `${to}\n\nI wrote to you last week about the 700 Pharmacy decision. The part that matters practically is what it did to the insurers, so here it is.\n\nBefore, a carrier could refuse to pay for a work comp prescription by pointing at the anti-referral statute. That argument is gone. The Court held the statute does not reach prescription drugs, so payment cannot be denied on those grounds.\n\nFor a practice it means the work comp scripts you already write can now be handled in a way that keeps the economics in the practice rather than sending them elsewhere. You do not own a pharmacy or run one, and you prescribe exactly as you do today.\n\nIf you would rather not take my word for it, here is the ruling itself:\n\nhttps://mdconcierge.net/decision.html\n\nAnd here is how we have set up over 400 providers to start generating compliant ancillary revenue on the medications they already prescribe:\n\nhttps://mdconcierge.net/brief.html` + optout + sig;
+    return `${to}\n\nI wrote to you last week about the 700 Pharmacy decision. The part that matters practically is what it did to the insurers, so here it is.\n\nBefore, a carrier could refuse to pay for a work comp prescription by pointing at the anti-referral statute. That argument is gone. The Court held the statute does not reach prescription drugs, so payment cannot be denied on those grounds.\n\nFor a practice it means the work comp scripts you already write can now be handled in a way that keeps the economics in the practice rather than sending them elsewhere. You do not own a pharmacy or run one, and you prescribe exactly as you do today.\n\nIf you would rather not take my word for it, here is the ruling itself:\n\nhttps://mdconcierge.net/decision.html?p=${t}\n\nAnd here is how we have set up over 400 providers to start generating compliant ancillary revenue on the medications they already prescribe:\n\nhttps://mdconcierge.net/brief.html?p=${t}` + optout + sig;
   }
   if (touch === 3) {
-    return `${to}\n\nTwo notes ago I sent you the June ruling on work comp prescriptions. This one is about the money, since that is the question everyone gets to eventually.\n\nPennsylvania reimburses work comp pharmacy at average wholesale price plus ten percent. That is set by the state fee schedule, not negotiated, and it is materially better than what commercial plans pay.\n\nIt is entirely mail order. The medication goes to the patient at home, next day, at no cost to them, and there are no denials while the claim is open. Nothing is stocked in your office and your staff handles none of it.\n\nWhat it comes to for any given practice depends on how much work comp you actually see. A short call is usually enough to work out whether it is worth your time, and sometimes the answer is that it is not.\n\nhttps://mdconcierge.net/brief.html` + optout + sig;
+    return `${to}\n\nTwo notes ago I sent you the June ruling on work comp prescriptions. This one is about the money, since that is the question everyone gets to eventually.\n\nPennsylvania reimburses work comp pharmacy at average wholesale price plus ten percent. That is set by the state fee schedule, not negotiated, and it is materially better than what commercial plans pay.\n\nIt is entirely mail order. The medication goes to the patient at home, next day, at no cost to them, and there are no denials while the claim is open. Nothing is stocked in your office and your staff handles none of it.\n\nWhat it comes to for any given practice depends on how much work comp you actually see. A short call is usually enough to work out whether it is worth your time, and sometimes the answer is that it is not.\n\nhttps://mdconcierge.net/brief.html?p=${t}` + optout + sig;
   }
   return `${to}\n\nLast note from me on this, and it is the one about limits, because you should hear them from me rather than find them later.\n\nThis is workers compensation only. It does not extend to Medicare, Medicaid or any federal program, and it does not extend to laboratory work, where a different federal statute applies.\n\nSo if work comp is not a real part of your practice, none of this was ever relevant and that is a perfectly good answer.\n\n${routingAsk(p).trim()}\n\nIf it is relevant and the timing was simply wrong, I am easy to find.` + optout + sig;
 }
@@ -340,7 +341,10 @@ If you aren't interested, or don't wish to hear from me anymore, click here and 
       await queueEmail({
         _last: p.last_name, provider_id: p.id, touch_no: 0, to_email: p.email,
         subject: o.headline || SUBJECTS[1],
-        body_text: body, body_html: mergeEngaged(0, p, () => body),
+        // Plain text here too. A recycled lead is a cold lead who has already ignored four
+        // designed emails, so sending a fifth in the same format is the definition of doing the
+        // same thing again.
+        body_text: body, body_html: null, template_key: 'plain',
         status: 'pending', scheduled_date: today(),
         objective: 'drip', template_key: 'drip', channel: 'email', content_id: o.id,
       });
