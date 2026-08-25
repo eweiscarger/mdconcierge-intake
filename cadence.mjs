@@ -171,7 +171,9 @@ function touchBody(touch, p, hook) {
   const to = staff ? `${p.first_name || ''},`.trim() : `Dr. ${p.last_name || ''},`.trim();
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
   const optout = "\n\nIf you aren't interested, just reply and say so and I won't write again.";
-  const sig = "\n\nBest,\nEric Weiscarger\nMDconcierge\n570-817-7569";
+  // A letter that ends on a bare name and a phone number reads like a note passed in a corridor.
+  // The text half carries the same details the signature block shows, typed out.
+  const sig = "\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\nReferral Management • Work Comp Pharmacy • Ancillary Coordination\n(570) 817-7569 • eric@mdconcierge.net • mdconcierge.net";
 
   if (touch === 1) {
     return `${to}\n\n${lead}In June the Pennsylvania Supreme Court decided a case called 700 Pharmacy. It is worth two minutes of your time if you treat injured workers.\n\nThe anti-referral provision in the Workers Compensation Act lists eight services a physician cannot refer to himself. The Court held, five to two, that the list means what it says. Prescription drugs are not on it.\n\nSo the question of what a practice may do with its work comp prescriptions is now settled in a way it was not before.\n\nDaniel Siegel argued the case and won it. Alice Gosfield published an analysis in June, Factoring and Self-Referral: Limits and Opportunities. Both write-ups are on the overview page below.\n\nRead it yourself: [the 700 Pharmacy decision, Pennsylvania Supreme Court](https://mdconcierge.net/decision.html?p=${t})\n\nOr see [how practices are participating](https://mdconcierge.net/brief.html?p=${t}), where you can also have more sent to you.` + optout + sig;
