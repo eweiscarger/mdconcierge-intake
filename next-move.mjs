@@ -189,7 +189,9 @@ async function promoteDueMoves() {
       provider_id: p.id, touch_no: 0, to_email: p.email, subject: await subjectFor(p, mv),
       body_text: text, body_html: html,
       status: 'pending', scheduled_date: today,
-      objective: mv.angle || null, template_key: 'personal', channel: 'email',
+      // plain, not personal. Personal renders a letter with the designed signature, which is an
+      // HTML part and a remote image, and Eric has taken HTML out of everything that goes out.
+      objective: mv.angle || null, template_key: 'plain', channel: 'email',
     });
     await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, { status: 'queued', resolved_at: new Date().toISOString() });
     already.add(p.id);
