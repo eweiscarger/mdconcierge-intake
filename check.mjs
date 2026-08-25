@@ -148,6 +148,10 @@ export function emailFaults(m) {
     if (html.trim() && !OPTOUT.test(vis)) f.push('no opt-out in the designed email');
     if (text.trim() && !OPTOUT.test(text)) f.push('no opt-out in the plain text');
   }
+  // And the rule the other way, which was missing. Eric said it plainly: a one to one email is not
+  // marketing and carries no opt-out. Only the requirement existed, never the prohibition, so a
+  // personal note could sit there with an unsubscribe line under the signature and pass clean.
+  else if (OPTOUT.test(both)) f.push('opt-out line on a personal email, which is not marketing');
   if (html.trim()) {
     const o = vis.search(OPTOUT), d = vis.indexOf('Dr. ');
     if (o > -1 && d > -1 && o < d) f.push('opt-out appears above the greeting');

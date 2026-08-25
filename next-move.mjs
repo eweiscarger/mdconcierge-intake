@@ -457,8 +457,24 @@ async function main() {
     // Check the draft the moment it is written, not days later when it comes due. A bad
     // recommendation that sits for a week is a bad recommendation Eric has to read and reject.
     const everReplied = (replies || []).length > 0;
-    const draftFaults = emailFaults({ text: mv.draft, lastName: '', addressAs: '', neverReplied: !everReplied, campaign: false });
-    const blocking = draftFaults.filter((f) => /never happened|never answered|dash|British|tracking|banned/i.test(f));
+    // {{calendar}} becomes a real tracked link at send time, not here, so the gate would otherwise
+    // read a draft that does offer the calendar as one that offers to meet and gives no way to do
+    // it. Stand a representative link in its place for the check only; mv.draft keeps the token.
+    const forCheck = String(mv.draft || '').replace(/\{\{calendar\}\}/g,
+      'https://mdconcierge.net/go.html?p=' + '0'.repeat(32) + '&to=book');
+    const draftFaults = emailFaults({ text: forCheck, lastName: '', addressAs: '', neverReplied: !everReplied, campaign: false });
+    // A fault means the draft breaks a rule, so a fault discards it. This used to run the other
+    // way round, keeping only faults whose text matched a hand written list, and the list had
+    // drifted: it did not mention clock times, in office dispensing, an unlabelled link or Eric
+    // written about in the third person, so the gate found those and the draft was queued anyway.
+    // Two emails proposing "Tuesday, August 25 at 9:00am or 2:00pm Eastern" reached the front of
+    // the queue that way, to physicians who have never once written back.
+    //
+    // The exceptions are the faults this call cannot judge and the send path repairs anyway: the
+    // greeting and surname are checked against an empty record here, and the signature is attached
+    // when the email is actually sent.
+    const REPAIRED_AT_SEND = /surname on the record|open on the greeting|no signature|no opt-out/i;
+    const blocking = draftFaults.filter((f) => !REPAIRED_AT_SEND.test(f));
     if (blocking.length) {
       console.error(`next-move: discarded a draft for ${p.last_name}: ${blocking.join(', ')}`);
       continue;
