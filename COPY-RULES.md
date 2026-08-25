@@ -6,8 +6,12 @@ say it at least once.
 
 ## Structure
 
-1. **Subject is always the Touch 1 subject** unless Eric names a different one:
-   `PA Court Opens Up Significant Revenue Opportunity for Physicians`
+1. **Subjects are short and lowercase.** `work comp scripts`, `what the ruling changed`,
+   `the numbers behind it`, `where this does not apply`. Where a thread already exists, its
+   subject wins outright, because a paraphrased subject starts a new thread.
+   `PA Court Opens Up Significant Revenue Opportunity for Physicians` is **retired**. Eric on
+   seeing it on a reply to an introduction: "there was never cold outreach, that should never be
+   the subject." It reads as a press release, which is what it was.
 2. **Lead with the opportunity, not with yourself.** A warm opener is at most two sentences,
    and only when a real prior relationship exists. An email that says "I moved on to this"
    without naming the June 16 ruling and what the program is has no proposition in it.
