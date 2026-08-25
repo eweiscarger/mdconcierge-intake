@@ -189,7 +189,7 @@ function touchBody(touch, p, hook) {
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
 // as a press release, which is what it was.
 const SUBJECTS = {
-  1: "work comp scripts",
+  1: "PA Court OKs Rx Revenue for Work Comp",
   2: "what the ruling changed",
   3: "the numbers behind it",
   4: "where this does not apply",
