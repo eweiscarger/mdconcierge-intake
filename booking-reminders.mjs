@@ -23,6 +23,11 @@ const esc = (s) => String(s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<'
 const fmt = (d) => new Intl.DateTimeFormat('en-US', {
   timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit',
 }).format(d);
+// The calendar day in Eric's timezone, so "today" and "tomorrow" mean what he sees on his calendar
+// rather than what UTC happens to say at the moment the cron runs.
+const dayKey = (d) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(d);
 
 const mailer = () => nodemailer.createTransport({
   host: 'smtp.zoho.com', port: 465, secure: true,
@@ -72,10 +77,13 @@ const run = async () => {
     if (!start) continue;
     const mins = (start - now) / 60000;
 
-    // Day before: anything landing 18-30 hours out. A booking made inside that window still gets
-    // one on the next hourly pass rather than silently skipping straight to the hour notice.
+    // The heads-up notice: anything from 90 minutes to 30 hours out. The window is deliberately
+    // wide so a meeting booked at short notice still gets one on the next hourly pass instead of
+    // skipping straight to the hour notice. Because of that width the meeting may be today or
+    // tomorrow, so say which: a 3pm booking for 5:45pm the same day was going out as "Tomorrow".
     if (!b.reminded_day_at && mins > 90 && mins <= 30 * 60) {
-      await notify(`Tomorrow: ${b.name}`, `<p style="font-size:15px;">You have this tomorrow.</p>${await brief(b)}`);
+      const when = dayKey(new Date(start)) === dayKey(new Date(now)) ? 'Today' : 'Tomorrow';
+      await notify(`${when}: ${b.name}`, `<p style="font-size:15px;">You have this ${when.toLowerCase()}.</p>${await brief(b)}`);
       await sPatch(`bookings?id=eq.${b.id}`, { reminded_day_at: new Date().toISOString() });
       console.log(`day-before sent: ${b.name} @ ${fmt(new Date(start))}`);
       sent++;
