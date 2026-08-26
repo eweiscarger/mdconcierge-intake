@@ -105,8 +105,13 @@ const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v
 // physician and the reason, so a broken template is obvious in the run log rather than in Eric's
 // inbox three days later.
 let refused = 0;
-async function queueEmail(row) {
-  const f = emailFaults({ html: row.body_html, text: row.body_text, lastName: row._last, toEmail: row.to_email });
+// Everything this builder queues is campaign mail: the cold cadence touches and the news drip,
+// both of which carry the opt-out on purpose. emailFaults branches on that flag, and it was never
+// passed, so `undefined` read as personal and the gate refused those emails for carrying the very
+// opt-out they are required to carry. Thirteen of thirteen were thrown out on 25 Aug 2026 for it.
+// Anything genuinely one to one must pass campaign:false rather than rely on the default.
+async function queueEmail(row, campaign = true) {
+  const f = emailFaults({ campaign, html: row.body_html, text: row.body_text, lastName: row._last, toEmail: row.to_email });
   delete row._last;
   if (f.length) { refused++; console.error('  REFUSED ' + row.to_email + ': ' + f.join(', ')); return false; }
   await sPost('mdrx_outbox', row);
