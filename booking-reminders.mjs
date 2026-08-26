@@ -50,26 +50,30 @@ async function mailPhysician(to, subject, html) {
 // phone number, which is exactly what happened to the Bechtold call on 25 Aug 2026.
 // ---------------------------------------------------------------------------
 const SITE = 'https://mdconcierge.net';
-function confirmHtml(b) {
-  // "Lauren Bechtold, MD" and "Rishin Patel MD" both need to come out as "Dr. Bechtold", so strip
-  // the credentials before taking the surname rather than after, or the greeting reads "Dr. MD".
+// How to address them. "Lauren Bechtold, MD" and "Rishin Patel MD" both need to come out as
+// "Dr. Bechtold", so strip the credentials before taking the surname rather than after, or the
+// greeting reads "Dr. MD". Anyone without credentials keeps their first name.
+function confirmName(b) {
   const CRED = '[,\\s]+(m\\.?d\\.?|d\\.?o\\.?|p\\.?a\\.?-?c?|c?rnp|n\\.?p\\.?|dpm|dds|phd|mba|facs)\\b';
   const raw = String(b.name || '');
   const bare = raw.replace(new RegExp(CRED, 'gi'), '').replace(/[,\s]+$/, '').trim();
   const hasCred = new RegExp(CRED, 'i').test(raw);   // fresh, non-global: .test() on a /g regex is stateful
-  const who = /^(dr|mr|ms|mrs)\b/i.test(bare) ? bare
-            : (hasCred && bare.includes(' ') ? `Dr. ${bare.split(/\s+/).pop()}`
-            : (bare.split(' ')[0] || bare));
+  return /^(dr|mr|ms|mrs)\b/i.test(bare) ? bare
+       : (hasCred && bare.includes(' ') ? `Dr. ${bare.split(/\s+/).pop()}`
+       : (bare.split(' ')[0] || bare));
+}
+function confirmHtml(b) {
+  const who = confirmName(b);
   const resched = `${SITE}/book.html${b.token ? '?p=' + encodeURIComponent(b.token) : ''}`;
   const go = (to) => b.token ? `${SITE}/go.html?p=${encodeURIComponent(b.token)}&amp;to=${to}` : `${SITE}/brief.html`;
   // What happens at the appointed time, so neither of them sits waiting for the other to move.
   const how = b.meeting_mode === 'phone'
     ? (b.phone
-       ? `<p style="font-size:15px;"><b>I'll call you at ${esc(b.phone)}.</b> Nothing for you to join or install.</p>`
-       : `<p style="font-size:15px;"><b>This one is a phone call and I'll be ringing you.</b> I don't have your number yet. <a href="${resched}">Add it here</a>, and you can switch to video on that page if you'd rather.</p>`)
+       ? `<p style="font-size:15px;"><b>I will call you at ${esc(b.phone)}.</b> Nothing for you to join or install.</p>`
+       : `<p style="font-size:15px;"><b>This one is a phone call, so I will be the one calling.</b> I do not have a number for you yet. Feel free to reply with it, or <a href="${resched}">add it here</a>. That page also lets you switch to video if that is easier.</p>`)
     : (b.join_url
-       ? `<p style="font-size:15px;"><b>We'll meet by video.</b> <a href="${esc(b.join_url)}">Join from this link</a>, straight in your browser, nothing to download.</p>`
-       : `<p style="font-size:15px;"><b>We'll meet by video.</b> I'll send the link before we speak. If you'd rather I just call you, <a href="${resched}">add your number here</a>.</p>`);
+       ? `<p style="font-size:15px;"><b>We will meet by video.</b> <a href="${esc(b.join_url)}">Join from this link</a>, straight in your browser, nothing to download.</p>`
+       : `<p style="font-size:15px;"><b>We will meet by video.</b> I will send the link before we speak. If you would rather I just call you, <a href="${resched}">add your number here</a>.</p>`);
   return `
   <div style="font-family:Inter,Arial,sans-serif;color:#14213D;max-width:560px;">
     <p>You're on my calendar, ${esc(who)}. Let's make our 15 minutes count.</p>
@@ -151,6 +155,26 @@ const run = async () => {
       await sPatch(`bookings?id=eq.${b.id}`, { reminded_day_at: new Date().toISOString() });
       console.log(`day-before sent: ${b.name} @ ${fmt(new Date(start))}`);
       sent++;
+    }
+
+    // A phone booking with no number is a call that cannot happen. Ask once, roughly two hours
+    // out, while there is still time for them to answer. Nothing about the program in here: it is
+    // a logistics note, and it goes to physicians in any state, so it carries no PA material.
+    if (b.meeting_mode === 'phone' && !b.phone && !b.number_asked_at && mins > 90 && mins <= 180 && b.email) {
+      const link = `${SITE}/book.html${b.token ? '?p=' + encodeURIComponent(b.token) : ''}`;
+      try {
+        await mailPhysician(b.email, 'Before our call', `
+          <div style="font-family:Inter,Arial,sans-serif;color:#14213D;max-width:560px;">
+            <p>Hi ${esc(confirmName(b))},</p>
+            <p>I look forward to speaking with you later today. I realized I do not have a number to reach you on.</p>
+            <p>Feel free to send it over, or you can <a href="${link}">add it here</a> if that is easier. I am also happy to do video instead.</p>
+            <p>Best,<br>Eric</p>
+          </div>`);
+        await sPatch(`bookings?id=eq.${b.id}`, { number_asked_at: new Date().toISOString() });
+        await notify(`No number yet: ${b.name}`, `<p style="font-size:16px;color:#b34700;"><b>This is a phone call and there is no number on file.</b> Asked them for it just now.</p>${await brief(b)}`);
+        console.log(`number asked: ${b.name}`);
+        sent++;
+      } catch (e) { console.error(`number ask failed for ${b.name}: ${String(e)}`); }
     }
 
     // One hour out, with a wide enough band that an hourly cron cannot miss it.
