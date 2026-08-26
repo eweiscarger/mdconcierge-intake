@@ -179,6 +179,17 @@ function routingAsk(p) {
 const PROGRAM = () =>
   `What that means: the revenue those prescriptions already generate comes back to the practice instead of a pharmacy benefits manager with no role in the treatment. You do not own or run the pharmacy and you prescribe exactly as you do today. Our in-network pharmacy overnights the medication to the patient at no cost to them, and MDRx manages the billing and collections, remitting the majority of what is collected to you or the practice. Over 400 providers are doing this with us now.`;
 // Kept separate so the block can sit early in a letter while the call to action stays at the end.
+// For a physician whose employer will not let him take part in the economics. Written as a
+// condition rather than aimed at a segment, because nothing in the record reliably says who is
+// employed and who is not: `independent` reads false on 314 of 315 funnel leads. A physician in
+// private practice reads past it in a second; an employed one recognises himself.
+const HOSPITAL = () =>
+  `If your system restricts economic participation, I would still ask you to consider it for the patient side alone. Your patients receive one hundred percent of their medication at no cost, delivered next day. I would be glad to discuss that avenue if it is the more appropriate one.`;
+// The same offer without the employment premise, for the last note. A physician who simply does
+// not want the revenue can still want his patients to get their medication, and that is a
+// conversation worth having rather than a silence.
+const PATIENTS_ONLY = () =>
+  `And if participating in the economics is not for you, I would still ask you to consider it for the patient side alone. Your patients receive one hundred percent of their medication at no cost, delivered next day. I would be glad to discuss that avenue if it is the more appropriate one.`;
 const OVERVIEW = (t) =>
   `[Here is an overview of how it works](https://mdconcierge.net/brief.html?p=${t}), and you can have more sent to you from that page.`;
 
@@ -195,7 +206,7 @@ function touchBody(touch, p, hook) {
   if (touch === 1) {
     return `${to}\n\n${lead}On June 16 the Pennsylvania Supreme Court decided a case called 700 Pharmacy. If you treat injured workers it is worth two minutes.\n\nDaniel Siegel argued the case and won it. His own summary puts it in three lines.\n\nA physician can refer patients to a pharmacy he owns, or has a financial interest in, for prescription drugs, supporting continuity of care.\n\nA pharmacy owned by physicians can be paid for prescriptions provided to workers' compensation claimants, even where the referring doctor has a financial interest.\n\nAn insurer cannot deny payment for prescription drugs on the grounds of prohibited self referral under the current law.\n\nThat is the whole decision. You can read [his write-up here](https://mdconcierge.net/go.html?p=${t}&to=siegel).\n\n${PROGRAM()}
 
-${OVERVIEW(t)}\n\nWhere do your work comp scripts go now?` + optout + sig;
+${HOSPITAL()}\n\n${OVERVIEW(t)}\n\nWhere do your work comp scripts go now?` + optout + sig;
   }
   if (touch === 2) {
     return `${to}
@@ -217,9 +228,21 @@ ${OVERVIEW(t)}` + optout + sig;
 
 ${OVERVIEW(t)}\n\nWhat it comes to for any given practice depends on how much work comp you actually see.` + optout + sig;
   }
-  return `${to}\n\nLast note from me, and I would rather tell you where this does not reach than let you find it later.\n\nIt is workers compensation only. Not Medicare, not Medicaid, not any federal program, and not laboratory work, where a different federal statute applies. If work comp is not a real part of your practice, none of this was ever relevant and that is a perfectly good answer.\n\nWhere it is relevant, here is what it looks like. Nothing is stocked in your office. Pennsylvania pays work comp pharmacy at average wholesale price plus ten percent, set by the state fee schedule rather than negotiated with a carrier.\n\n${PROGRAM()}
+  return `${to}
 
-${OVERVIEW(t)}\n\n${routingAsk(p).trim()}` + optout + sig;
+Last note from me, and I would rather tell you where this does not reach than let you find it later.
+
+It is workers compensation only. Not Medicare, not Medicaid, not any federal program, and not laboratory work, where a different federal statute applies. If work comp is not a real part of your practice, none of this was ever relevant and that is a perfectly good answer.
+
+Where it is relevant, here is what it looks like. Nothing is stocked in your office. Pennsylvania pays work comp pharmacy at average wholesale price plus ten percent, set by the state fee schedule rather than negotiated with a carrier.
+
+${PROGRAM()}
+
+${PATIENTS_ONLY()}
+
+${OVERVIEW(t)}
+
+${routingAsk(p).trim()}` + optout + sig;
 }
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
 // as a press release, which is what it was.
