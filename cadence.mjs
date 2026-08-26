@@ -206,7 +206,7 @@ function touchBody(touch, p, hook) {
   if (touch === 1) {
     return `${to}\n\n${lead}On June 16 the Pennsylvania Supreme Court decided a case called 700 Pharmacy. If you treat injured workers it is worth two minutes.\n\nDaniel Siegel argued the case and won it. His own summary puts it in three lines.\n\nA physician can refer patients to a pharmacy he owns, or has a financial interest in, for prescription drugs, supporting continuity of care.\n\nA pharmacy owned by physicians can be paid for prescriptions provided to workers' compensation claimants, even where the referring doctor has a financial interest.\n\nAn insurer cannot deny payment for prescription drugs on the grounds of prohibited self referral under the current law.\n\nThat is the whole decision. You can read [his write-up here](https://mdconcierge.net/go.html?p=${t}&to=siegel).\n\n${PROGRAM()}
 
-${HOSPITAL()}\n\n${OVERVIEW(t)}\n\nWhere do your work comp scripts go now?` + optout + sig;
+${OVERVIEW(t)}\n\nWhere do your work comp scripts go now?` + optout + sig;
   }
   if (touch === 2) {
     return `${to}
