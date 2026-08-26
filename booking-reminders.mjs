@@ -37,6 +37,55 @@ const mailer = () => nodemailer.createTransport({
 async function notify(subject, html) {
   await mailer().sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC}>`, to: ERIC, subject, html, headers: { 'X-MDC-Auto': 'reminder' } });
 }
+async function mailPhysician(to, subject, html) {
+  await mailer().sendMail({ from: `"Eric, MDconcierge" <${ERIC}>`, to, subject, html });
+}
+
+// ---------------------------------------------------------------------------
+// The booking confirmation.
+//
+// booking-create sends this itself and stamps confirmed_at in the same insert. This pass exists
+// for every OTHER way a booking can appear: put in by hand, moved, created from the Cockpit. Those
+// used to reach the physician as a bare Zoho invite with no link, no context and no way to give a
+// phone number, which is exactly what happened to the Bechtold call on 25 Aug 2026.
+// ---------------------------------------------------------------------------
+const SITE = 'https://mdconcierge.net';
+function confirmHtml(b) {
+  // "Lauren Bechtold, MD" and "Rishin Patel MD" both need to come out as "Dr. Bechtold", so strip
+  // the credentials before taking the surname rather than after, or the greeting reads "Dr. MD".
+  const CRED = '[,\\s]+(m\\.?d\\.?|d\\.?o\\.?|p\\.?a\\.?-?c?|c?rnp|n\\.?p\\.?|dpm|dds|phd|mba|facs)\\b';
+  const raw = String(b.name || '');
+  const bare = raw.replace(new RegExp(CRED, 'gi'), '').replace(/[,\s]+$/, '').trim();
+  const hasCred = new RegExp(CRED, 'i').test(raw);   // fresh, non-global: .test() on a /g regex is stateful
+  const who = /^(dr|mr|ms|mrs)\b/i.test(bare) ? bare
+            : (hasCred && bare.includes(' ') ? `Dr. ${bare.split(/\s+/).pop()}`
+            : (bare.split(' ')[0] || bare));
+  const resched = `${SITE}/book.html${b.token ? '?p=' + encodeURIComponent(b.token) : ''}`;
+  const go = (to) => b.token ? `${SITE}/go.html?p=${encodeURIComponent(b.token)}&amp;to=${to}` : `${SITE}/brief.html`;
+  // What happens at the appointed time, so neither of them sits waiting for the other to move.
+  const how = b.meeting_mode === 'phone'
+    ? (b.phone
+       ? `<p style="font-size:15px;"><b>I'll call you at ${esc(b.phone)}.</b> Nothing for you to join or install.</p>`
+       : `<p style="font-size:15px;"><b>This one is a phone call and I'll be ringing you.</b> I don't have your number yet. <a href="${resched}">Add it here</a>, and you can switch to video on that page if you'd rather.</p>`)
+    : (b.join_url
+       ? `<p style="font-size:15px;"><b>We'll meet by video.</b> <a href="${esc(b.join_url)}">Join from this link</a>, straight in your browser, nothing to download.</p>`
+       : `<p style="font-size:15px;"><b>We'll meet by video.</b> I'll send the link before we speak. If you'd rather I just call you, <a href="${resched}">add your number here</a>.</p>`);
+  return `
+  <div style="font-family:Inter,Arial,sans-serif;color:#14213D;max-width:560px;">
+    <p>You're on my calendar, ${esc(who)}. Let's make our 15 minutes count.</p>
+    <p><b>${esc(fmt(new Date(b.slot_start)))} Eastern</b></p>
+    ${how}
+    <p>Nothing to prepare. If you want a refresher beforehand, these take a minute each:</p>
+    <ul style="line-height:1.7;">
+      <li><a href="${go('program')}">How the program works</a>, one page</li>
+      <li><a href="${go('siegel')}">Daniel Siegel's summary</a>, he argued the case before the Court</li>
+      <li><a href="${go('gosfield')}">Alice Gosfield's opinion</a> on the structure</li>
+    </ul>
+    <p>Otherwise I'll cover it on the call and we can spend the time on your own numbers.</p>
+    <p>See you soon. If something comes up, use this link to pick a new time, no problem at all: <a href="${resched}">reschedule</a>.</p>
+    <p>Best,<br>Eric<br>MDconcierge</p>
+  </div>`;
+}
 
 // What Eric actually needs in front of him before he dials: who, where they work, and what they
 // have already read, so he is not opening the CRM one minute before the call.
@@ -76,6 +125,21 @@ const run = async () => {
     const start = Date.parse(b.slot_start);
     if (!start) continue;
     const mins = (start - now) / 60000;
+
+    // Confirmation for anything booked outside the booking page. Future meetings only: a booking
+    // added after the fact for the record should not tell a physician to show up to something that
+    // has already happened.
+    if (!b.confirmed_at && mins > 0 && b.email) {
+      try {
+        await mailPhysician(b.email, "You're on my calendar, one quick step before our call", confirmHtml(b));
+        await sPatch(`bookings?id=eq.${b.id}`, { confirmed_at: new Date().toISOString() });
+        await notify(`Confirmation sent: ${b.name}`, `<p style="font-size:15px;">This one was booked outside the page, so the engine sent ${esc(b.name)} the confirmation.</p>${await brief(b)}`);
+        console.log(`confirmation sent: ${b.name} @ ${fmt(new Date(start))}`);
+        sent++;
+      } catch (e) {
+        console.error(`confirmation failed for ${b.name}: ${String(e)}`);
+      }
+    }
 
     // The heads-up notice: anything from 90 minutes to 30 hours out. The window is deliberately
     // wide so a meeting booked at short notice still gets one on the next hourly pass instead of
