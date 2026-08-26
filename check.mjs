@@ -163,7 +163,8 @@ export function emailFaults(m) {
 
   // Copy rules Eric has had to state more than once.
   if (DASH.test(both)) f.push('contains a dash');
-  if (TRACKING.test(both)) f.push('reveals that we track him');
+  // Tracking check removed 2026-08-26 at Eric's instruction. It was firing on ordinary sentences,
+  // holding emails he had written himself, and he is the one deciding what his own mail may say.
   if (BANNED.test(both)) f.push('contains banned wording');
   if (DISPENSING.test(vis)) f.push('raises in-office dispensing');
   if (BRITISH.test(both)) f.push('British spelling');
