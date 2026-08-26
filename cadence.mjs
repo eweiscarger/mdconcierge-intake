@@ -253,6 +253,18 @@ async function run() {
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
   const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,credentials,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(manual_touch_at.is.null,manual_touch_at.lt.${manualCutoff()})&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
 
+  // What each of them has ACTUALLY been sent, taken from the outbox rather than from touch_count.
+  // On 26 Aug 2026 seventeen providers were sitting at touch_count 0 with cold touches already in
+  // their history, six of them queued to receive Touch 1 a second time. Nothing in this repo had
+  // reset them: recycle_round was 0, so it was not the recycle path, it was done by hand. A field
+  // anything can overwrite is not a safe place to keep the one fact that decides what a physician
+  // receives next, so the sent history decides and touch_count is only a fallback.
+  const sentTouches = new Map();
+  for (const row of await sGet(`mdrx_outbox?select=provider_id,touch_no&status=eq.sent&touch_no=gt.0&limit=5000`)) {
+    const id = row.provider_id, n = Number(row.touch_no) || 0;
+    if (id && n > (sentTouches.get(id) || 0)) sentTouches.set(id, n);
+  }
+
   // Approved news openers, for A/B-rotating a fresh angle into recycled leads' first touch.
   const openers = await sGet(`mdrx_content_queue?select=id,draft_hook&status=eq.approved&kind=eq.opener&order=id.desc`);
   let openerIdx = 0;
@@ -282,7 +294,14 @@ async function run() {
     // small enough to stay clean while the daily cap still governs total volume.
     const pracCount = practicesToday.get(prac) || 0;
     if (prac && pracCount >= 3) continue;
-    const touch = (p.touch_count || 0) + 1;
+    // Whichever is further along wins. A physician who has had two cold touches gets the third,
+    // never the first again, no matter what the record claims about him.
+    const alreadySent = sentTouches.get(p.id) || 0;
+    const touch = Math.max(Number(p.touch_count) || 0, alreadySent) + 1;
+    if (alreadySent > (Number(p.touch_count) || 0)) {
+      console.log(`  touch_count repaired from outbox: ${p.email} says ${p.touch_count || 0}, has been sent ${alreadySent}, queueing touch ${touch}`);
+      await sPatch(`mdrx_providers?id=eq.${p.id}`, { touch_count: alreadySent });
+    }
     if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
     // A/B: a recycled lead's first touch leads with a fresh, approved news opener instead of repeating Touch 1.
     // A/B: a recycled lead's first touch LEADS with a fresh, approved news opener. The rest of
