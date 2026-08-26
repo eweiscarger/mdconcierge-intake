@@ -177,7 +177,7 @@ function routingAsk(p) {
 // One paragraph, because splitting it made the reader assemble the answer himself: what it means,
 // what he does not have to become, who ships and who bills, and who is already doing it.
 const PROGRAM = () =>
-  `What that means: the revenue those prescriptions already generate comes back to the practice instead of a pharmacy benefits manager with no role in the treatment. You do not own or run the pharmacy and you prescribe exactly as you do today. Our in-network pharmacy overnights the medication to the patient at no cost to them, and MDRx manages the billing and collections on your or the practice's behalf for a percentage of what is collected. Over 400 providers are doing this with us now.`;
+  `What that means: the revenue those prescriptions already generate comes back to the practice instead of a pharmacy benefits manager with no role in the treatment. You do not own or run the pharmacy and you prescribe exactly as you do today. Our in-network pharmacy overnights the medication to the patient at no cost to them, and MDRx manages the billing and collections, remitting the majority of what is collected to you or the practice. Over 400 providers are doing this with us now.`;
 // Kept separate so the block can sit early in a letter while the call to action stays at the end.
 const OVERVIEW = (t) =>
   `[Here is an overview of how it works](https://mdconcierge.net/brief.html?p=${t}), and you can have more sent to you from that page.`;
