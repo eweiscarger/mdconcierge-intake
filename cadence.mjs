@@ -296,8 +296,8 @@ async function run() {
   // Publish the touch templates so the CRM compose box can offer them as a dropdown.
   // The cadence stays the single source of truth; this is a one-way mirror with the merge
   // tokens left in, so the CRM can substitute the doctor it is actually looking at.
-  const TOUCH_LABELS = { 1: 'Touch 1 · the ruling', 2: 'Touch 2 · how the model works', 3: 'Touch 3 · where the ruling stops', 4: 'Touch 4 · closing the loop' };
-  for (const n of [1, 2, 3, 4]) {
+  const TOUCH_LABELS = { 1: 'Touch 1 · the patient never filled it', 2: 'Touch 2 · what it asks of the front desk', 3: 'Touch 3 · the legal side', 4: 'Touch 4 · the economics', 5: 'Touch 5 · leaving it here' };
+  for (const n of [1, 2, 3, 4, 5]) {
     const stub = { last_name: '{{last}}', funnel_token: '{{token}}' };
     await sPost('mdrx_templates',
       { touch_no: n, label: TOUCH_LABELS[n], subject: SUBJECTS[n] || '', body_text: touchBody(n, stub), updated_at: new Date().toISOString() },
@@ -401,8 +401,8 @@ ${TEXT_SIG}
 If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
     await queueEmail({
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
-      subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText,
-      objective: ['education','consequence','risk_reduction','breakup'][touch-1] || 'breakup',
+      subject: SUBJECTS[touch] || SUBJECTS[5], body_text: bodyText,
+      objective: ['education','operations','legal','economics','breakup'][touch-1] || 'breakup',
       template_key: `cold_${touch}`, channel: 'email',
       // No HTML part. The designed card is what was being filtered.
       body_html: null,
