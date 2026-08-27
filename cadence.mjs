@@ -204,10 +204,19 @@ function touchBody(touch, p, hook) {
   const sig = "\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\nReferral Management • Work Comp Pharmacy • Ancillary Coordination\n(570) 817-7569 • eric@mdconcierge.net • mdconcierge.net";
 
   if (touch === 1) {
-    return `${to}\n\n${lead}On June 16 the Pennsylvania Supreme Court decided a case called 700 Pharmacy. If you treat injured workers it is worth two minutes.\n\nDaniel Siegel argued the case and won it. His own summary puts it in three lines.\n\n- A physician can refer patients to a pharmacy he or she owns, or has a financial interest in, for prescription drugs, supporting continuity of care.\n\n- A pharmacy owned by physicians can be paid for prescriptions provided to workers' compensation claimants, even where the referring doctor has a financial interest.\n\n- An insurer cannot deny payment for prescription drugs on the grounds of prohibited self referral under the current law.\n\nThat is the whole decision. You can read [his write-up here](https://mdconcierge.net/go.html?p=${t}&to=siegel).\n\n${PROGRAM()}
+    return `${to}
 
-${OVERVIEW(t)}\n\nWhere do your work comp scripts go now?` + optout + sig;
+${lead}You write a script for a work comp patient. Three weeks later they are back, no better, and it turns out they never filled it. The carrier denied it at the counter and nobody told you.
+
+We have a mail order pharmacy program built for work comp claims. You e-prescribe the same way you do now, it ships to the patient's home the next day at no cost to them.
+
+No prior authorizations and no denials while the claim is open or in litigation. MDRx has been doing this for over 10 years with over 400 physicians.
+
+If it is useful I will send you the detail, or you can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened it up for physicians.
+
+How often does that happen with your work comp patients?` + optout + sig;
   }
+
   if (touch === 2) {
     return `${to}
 
