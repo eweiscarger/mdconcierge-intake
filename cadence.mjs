@@ -28,6 +28,7 @@ const TOUCH_HTML = {
   2: readFileSync(new URL('./email-templates/touch2.html', import.meta.url), 'utf8'),
   3: readFileSync(new URL('./email-templates/touch3.html', import.meta.url), 'utf8'),
   4: readFileSync(new URL('./email-templates/touch4.html', import.meta.url), 'utf8'),
+  5: readFileSync(new URL('./email-templates/touch5.html', import.meta.url), 'utf8'),
 };
 // Eric's signature lives INSIDE the card, not appended after it. send-outreach sees the
 // <!--signature-inline--> marker and skips its own append so it never doubles up.
@@ -217,49 +218,73 @@ If it is useful I will send you the detail, or you can read [the Pennsylvania Su
 How often does that happen with your work comp patients?` + optout + sig;
   }
 
+  // POSITION 2. The front desk. This was the third email and the physician was blunt about
+  // it: this is the real objection, and burying it until day nine means asking it after he
+  // has stopped opening.
   if (touch === 2) {
     return `${to}
 
-I wrote to you earlier about the 700 Pharmacy decision. The part that matters practically is what it did to the insurers, so here it is.
+The question most practices ask second is what this does to the staff.
 
-Before, a carrier could refuse to pay for a work comp prescription by pointing at the anti-referral statute. That argument is gone. The Court held the statute does not reach prescription drugs, so payment cannot be denied on those grounds.
+Nothing is stocked in your office. No prior authorizations land on anyone. You e-prescribe the same way you do now and the pharmacy changes in the EHR. That is the whole implementation.
 
-${PROGRAM()}
+MDRx handles the billing and the collections, and your staff touches none of it.
 
-Alice Gosfield's June newsletter puts factoring, where the physician's entity buys the claim from the provider and submits it on its own number, as not prohibited in Pennsylvania and worth considering. She adds that no court has ruled on it either way. You can read it here: [Factoring and Self-Referral](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
-
-If you would rather not take my word for it, read [the 700 Pharmacy decision, Pennsylvania Supreme Court](https://mdconcierge.net/decision.html?p=${t}).
-
-${OVERVIEW(t)}` + optout + sig;
+What would your office manager want to know?` + optout + sig;
   }
+
+  // POSITION 3. The old touch 2 restated touch 1 and earned nothing. This one carries what
+  // touch 1 only pointed at: what the Court actually held, and Gosfield on factoring.
   if (touch === 3) {
-    return `${to}\n\nTwo notes ago I sent you the June ruling on work comp prescriptions. This one covers how work comp pharmacy is actually reimbursed in Pennsylvania, since that is what determines whether any of it is worth a practice's attention.\n\nPennsylvania reimburses work comp pharmacy at average wholesale price plus ten percent. That is set by the state fee schedule, not negotiated, and it is materially better than what commercial plans pay.\n\nIt is entirely mail order. There are no denials while the claim is open, nothing is stocked in your office, and your staff handles none of it.\n\n${PROGRAM()}
+    return `${to}
 
-${OVERVIEW(t)}\n\nWhat it comes to for any given practice depends on how much work comp you actually see.` + optout + sig;
+On the legal side, since it is the thing most physicians want settled before anything else.
+
+A carrier used to be able to refuse to pay for a work comp prescription by pointing at the anti-referral statute. That argument is gone. The Court held the statute lists eight designated services and prescription drugs are not among them, so payment cannot be denied on those grounds.
+
+Daniel Siegel argued the case and won it. [His write-up is short](https://mdconcierge.net/go.html?p=${t}&to=siegel).
+
+Alice Gosfield covers where that leaves factoring, where your entity buys the claim from the pharmacy and submits it on its own number. She calls it not prohibited in Pennsylvania and worth considering, and adds that no court has ruled either way. [Hers is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).` + optout + sig;
   }
+
+  // POSITION 4. The money, and not before now.
+  if (touch === 4) {
+    return `${to}
+
+The money, since you would ask eventually.
+
+Your entity buys the claim from the pharmacy at fair market value, plus the dispense fee and shipping. MDRx bills the payer and carries the collection risk. When it is paid, you receive 65 percent of what was collected.
+
+One document, a Claims Purchase and Management Services Agreement. That is the whole arrangement.
+
+${OVERVIEW(t)}
+
+Want me to send it over?` + optout + sig;
+  }
+
+  // POSITION 5. Asks for nothing. The physician's read was that this is the one most likely
+  // to get a reply, because it gives him an easy out.
   return `${to}
 
-Last note from me, and I would rather tell you where this does not reach than let you find it later.
+I will leave it here so I am not crowding your inbox.
 
-It is workers compensation only. Not Medicare, not Medicaid, not any federal program, and not laboratory work, where a different federal statute applies. If work comp is not a real part of your practice, none of this was ever relevant and that is a perfectly good answer.
-
-Where it is relevant, here is what it looks like. Nothing is stocked in your office. Pennsylvania pays work comp pharmacy at average wholesale price plus ten percent, set by the state fee schedule rather than negotiated with a carrier.
-
-${PROGRAM()}
+It is workers compensation only. Not Medicare, not Medicaid, not any federal program. If work comp is not a real part of your practice then none of this was ever relevant, and that is a perfectly good answer.
 
 ${PATIENTS_ONLY()}
 
 ${OVERVIEW(t)}
 
-${routingAsk(p).trim()}` + optout + sig;
+If it becomes relevant, just reply and I will pick it up from there.` + optout + sig;
 }
+
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
 // as a press release, which is what it was.
 const SUBJECTS = {
-  1: "PA Court OKs Rx Revenue for Work Comp",
-  2: "What the PA Court Actually Held",
-  3: "Where Compliant Work Comp Revenue Comes From",
-  4: "where this does not apply",
+  1: "work comp scripts that never get filled",
+  2: "what it does to your front desk",
+  3: "the legal side of it",
+  4: "the economics, plainly",
+  5: "leaving it here",
 };
 
 async function run() {
@@ -356,7 +381,7 @@ async function run() {
       console.log(`  touch_count repaired from outbox: ${p.email} says ${p.touch_count || 0}, has been sent ${alreadySent}, queueing touch ${touch}`);
       await sPatch(`mdrx_providers?id=eq.${p.id}`, { touch_count: alreadySent });
     }
-    if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
+    if (touch > 5) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
     // A/B: a recycled lead's first touch leads with a fresh, approved news opener instead of repeating Touch 1.
     // A/B: a recycled lead's first touch LEADS with a fresh, approved news opener. The rest of
     // the designed email is unchanged, so it still carries the sources, buttons, and signature.
