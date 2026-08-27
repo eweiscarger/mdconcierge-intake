@@ -213,77 +213,70 @@ We have a mail order pharmacy program built for work comp claims. You e-prescrib
 
 No prior authorizations and no denials while the claim is open or in litigation. MDRx has been doing this for over 10 years with over 400 physicians.
 
-If it is useful I will send you the detail, or you can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened it up for physicians.
+You can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened it up for physicians. If you would rather I send you the detail, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).
 
 How often does that happen with your work comp patients?` + optout + sig;
   }
 
-  // POSITION 2. The front desk. This was the third email and the physician was blunt about
-  // it: this is the real objection, and burying it until day nine means asking it after he
-  // has stopped opening.
   if (touch === 2) {
     return `${to}
 
-The question most practices ask second is what this does to the staff.
+A work comp patient calls your office because the pharmacy wants an authorization before it will fill anything. Now someone on your staff is on the phone with an adjuster instead of running your day.
 
-Nothing is stocked in your office. No prior authorizations land on anyone. You e-prescribe the same way you do now and the pharmacy changes in the EHR. That is the whole implementation.
+We have a mail order pharmacy program built for work comp claims. If the prescription comes in, it gets dispensed. No prior authorizations and no denials while the claim is open or in litigation.
 
-MDRx handles the billing and the collections, and your staff touches none of it.
+It is mail order only. Nothing is stocked in your office. You e-prescribe the way you do now and change the pharmacy in the EHR, and MDRx handles the billing and the collections.
 
-What would your office manager want to know?` + optout + sig;
+If you want to know what it would ask of your office, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). Call, text, email or video, whichever you prefer.` + optout + sig;
   }
 
-  // POSITION 3. The old touch 2 restated touch 1 and earned nothing. This one carries what
-  // touch 1 only pointed at: what the Court actually held, and Gosfield on factoring.
   if (touch === 3) {
     return `${to}
 
-On the legal side, since it is the thing most physicians want settled before anything else.
+If you were ever told you cannot have an economic interest in the medication your work comp patients are prescribed, that was correct until June.
 
-A carrier used to be able to refuse to pay for a work comp prescription by pointing at the anti-referral statute. That argument is gone. The Court held the statute lists eight designated services and prescription drugs are not among them, so payment cannot be denied on those grounds.
+A carrier could refuse to pay by pointing at Pennsylvania's anti-referral statute. In the 700 Pharmacy case the Supreme Court held, 5 to 2, that the prohibition covers only the eight services the statute names, and prescription drugs are not one of them.
 
 Daniel Siegel argued the case and won it. [His write-up is short](https://mdconcierge.net/go.html?p=${t}&to=siegel).
 
-Alice Gosfield covers where that leaves factoring, where your entity buys the claim from the pharmacy and submits it on its own number. She calls it not prohibited in Pennsylvania and worth considering, and adds that no court has ruled either way. [Hers is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).` + optout + sig;
+Alice Gosfield wrote up what it means for physicians. She concludes: "For physicians who were wary of even trying this model, it is now worth reconsidering." [Hers is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).` + optout + sig;
   }
 
-  // POSITION 4. The money, and not before now.
   if (touch === 4) {
     return `${to}
 
-The money, since you would ask eventually.
+The prescriptions you write for a work comp patient get filled somewhere, billed to the carrier on the state fee schedule, and collected by someone who had no part in the treatment.
 
-Your entity buys the claim from the pharmacy at fair market value, plus the dispense fee and shipping. MDRx bills the payer and carries the collection risk. When it is paid, you receive 65 percent of what was collected.
+Since June that can be your practice instead. You receive 65 percent of what the carrier pays, less what the medication, the dispensing and the shipping cost. MDRx does the billing and carries the risk of collecting.
 
-One document, a Claims Purchase and Management Services Agreement. That is the whole arrangement.
+One document and you are in. You can participate individually or through the practice, whichever suits.
 
-${OVERVIEW(t)}
+[Here is how it works end to end](https://mdconcierge.net/brief.html?p=${t}).
 
-Want me to send it over?` + optout + sig;
+If you would rather talk it through, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).` + optout + sig;
   }
 
-  // POSITION 5. Asks for nothing. The physician's read was that this is the one most likely
-  // to get a reply, because it gives him an easy out.
+  // Touch 5 asks for nothing. It names the one real limit and leaves the door open.
   return `${to}
 
-I will leave it here so I am not crowding your inbox.
+Last note from me so I am not crowding your inbox.
 
-It is workers compensation only. Not Medicare, not Medicaid, not any federal program. If work comp is not a real part of your practice then none of this was ever relevant, and that is a perfectly good answer.
+The program is workers compensation only. Not Medicare, not Medicaid, not any federal program. If work comp is not a real part of your practice then none of this was ever relevant, and that is a perfectly good answer.
 
-${PATIENTS_ONLY()}
+If the economics are not for you, I would still ask you to consider it for the patient side alone. Your patients receive one hundred percent of their medication at no cost, delivered to their home the next day.
 
-${OVERVIEW(t)}
+[The June decision](https://mdconcierge.net/go.html?p=${t}&to=decision), [Siegel's analysis](https://mdconcierge.net/go.html?p=${t}&to=siegel) and [Gosfield's](https://mdconcierge.net/go.html?p=${t}&to=gosfield) stay up whenever they are useful.
 
-If it becomes relevant, just reply and I will pick it up from there.` + optout + sig;
+If it becomes relevant, reply, or [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk) and I will pick it up from there.` + optout + sig;
 }
 
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
 // as a press release, which is what it was.
 const SUBJECTS = {
   1: "work comp scripts that never get filled",
-  2: "what it does to your front desk",
-  3: "the legal side of it",
-  4: "the economics, plainly",
+  2: "prior auths on work comp scripts",
+  3: "what changed in june",
+  4: "the pharmacy side of a work comp claim",
   5: "leaving it here",
 };
 
@@ -296,7 +289,7 @@ async function run() {
   // Publish the touch templates so the CRM compose box can offer them as a dropdown.
   // The cadence stays the single source of truth; this is a one-way mirror with the merge
   // tokens left in, so the CRM can substitute the doctor it is actually looking at.
-  const TOUCH_LABELS = { 1: 'Touch 1 · the patient never filled it', 2: 'Touch 2 · what it asks of the front desk', 3: 'Touch 3 · the legal side', 4: 'Touch 4 · the economics', 5: 'Touch 5 · leaving it here' };
+  const TOUCH_LABELS = { 1: 'Touch 1 · the patient never filled it', 2: 'Touch 2 · prior auths and the front desk', 3: 'Touch 3 · what changed in june', 4: 'Touch 4 · the economics', 5: 'Touch 5 · leaving it here' };
   for (const n of [1, 2, 3, 4, 5]) {
     const stub = { last_name: '{{last}}', funnel_token: '{{token}}' };
     await sPost('mdrx_templates',
