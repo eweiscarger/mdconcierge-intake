@@ -28,6 +28,40 @@ Cash flow: nothing is fronted by the physician.
 
 ---
 
+## PBRx
+
+**PBRx also takes medication cost off the top, then splits the remainder.** It does not come out of
+the physician's portion only. Splits under discussion have ranged from 60 to 70 percent.
+
+> **Net to physician = s x (C - G)**, where s is the agreed split
+
+---
+
+## The general rule
+
+**MDRx is the only one of the three where the physician bears 100 percent of cost of goods.** PDRx
+and PBRx both absorb their share of it before the split.
+
+For any partner taking COGS off the top at split **s**, MDRx nets more only when:
+
+```
+G / C  <  (0.65 - s) / (1 - s)
+```
+
+| Partner split, COGS off top | MDRx wins only if COGS is below |
+|---|---|
+| 50 percent | 30 percent of collections |
+| 60 percent | 12.5 percent of collections |
+| 65 percent | never |
+| 70 percent | never |
+
+**At 65 percent or above with COGS off the top, MDRx cannot win on economics at any mix.** The splits
+are nominally equal but the physician is carrying the entire drug cost on one side and half or none
+of it on the other. Any comparison that sets MDRx at 65 against PBRx at 65 and calls them equivalent
+is wrong on its face.
+
+---
+
 ## The crossover
 
 Setting the two equal:
