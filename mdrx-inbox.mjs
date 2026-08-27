@@ -190,11 +190,15 @@ async function main() {
       // single most valuable email that arrives here, and it must never depend on a subject line.
       const REFERRERS = /@(mountainvalleyortho|mdrx360|therapointmedical)\.com$/i;
       const OURS = /mdrx|work\s?comp|workers.?comp|workers compensation|pharmacy program|injection kit|ancillar|DME/i;
-      const isMdrx = isTeam || prov || REFERRERS.test(fromAddr) || OURS.test(subject) || OURS.test(String(bodyText || '').slice(0, 2000));
-      if (!isMdrx) continue;
-
+      // The body has to be parsed BEFORE isMdrx, because isMdrx reads it. It used to be parsed
+      // after, which threw "Cannot access 'bodyText' before initialization" on every run and
+      // took the whole job down. Cost: we now parse messages we go on to skip, which is cheap
+      // next to the job failing.
       let bodyText = '';
       try { const parsed = await simpleParser(m.source); bodyText = (parsed.text || '').trim(); } catch (e) {}
+
+      const isMdrx = isTeam || prov || REFERRERS.test(fromAddr) || OURS.test(subject) || OURS.test(String(bodyText || '').slice(0, 2000));
+      if (!isMdrx) continue;
       const who = prov ? ('Dr. ' + (prov.last_name || '')) : (from.name || fromAddr);
 
       // Classify + draft (cap the model spend per run).
