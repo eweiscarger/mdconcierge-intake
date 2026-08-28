@@ -203,7 +203,13 @@ function touchBody(touch, p, hook) {
   // somebody he trusts does this and it works. It supersedes the older rule about not
   // asking who else handles this until a lead has gone quiet.
   const referral = "\n\nAnd if there is someone else in the practice I should be speaking with about this, I would appreciate you pointing me in the right direction, or an introduction if that is easier.";
-  const optout = "\n\nIf you aren't interested, just reply and say so and I won't write again.";
+  // Only the last email carries this in the body. Everywhere else it sat directly under the
+  // request for an introduction, which handed the physician the easier answer and put it last.
+  // It moves to the footer beside the unsubscribe link; touch five keeps it, because that
+  // email exists to give him the out.
+  const optout = touch === 5
+    ? "\n\nIf you aren't interested, just reply and say so and I won't write again."
+    : "";
   // A letter that ends on a bare name and a phone number reads like a note passed in a corridor.
   // The text half carries the same details the signature block shows, typed out.
   const sig = "\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\nReferral Management • Work Comp Pharmacy • Ancillary Coordination\n(570) 817-7569 • eric@mdconcierge.net • mdconcierge.net";
@@ -394,10 +400,11 @@ async function run() {
     // touchBody already closes with the soft opt-out and the signature. All that is
     // missing is the real unsubscribe link, so only that is added. Appending the
     // signature again here is what put two of them, and two opt-outs, on every email.
-    const bodyText = touchBody(touch, p, hook)
-      + `
-
-If you would rather I stop entirely, click here: ${STOP(p.funnel_token || '')}`;
+    // Touch five already said it in the body, so its footer is only the link.
+    const footer = touch === 5
+      ? `\n\nIf you would rather I stop entirely, click here: ${STOP(p.funnel_token || '')}`
+      : `\n\nIf you are not interested, just reply and say so, or click here and I will not write again: ${STOP(p.funnel_token || '')}`;
+    const bodyText = touchBody(touch, p, hook) + footer;
     await queueEmail({
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
       subject: SUBJECTS[touch] || SUBJECTS[5], body_text: bodyText,
