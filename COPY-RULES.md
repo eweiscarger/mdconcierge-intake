@@ -17,7 +17,9 @@ say it at least once.
    without naming the June 16 ruling and what the program is has no proposition in it.
 3. **One email per physician.** Never address two or three people in one note, even partners.
    Each gets their own tracking token, and the familiarity line varies per person.
-4. **Stagger partners at the same practice** across days. Never the same morning.
+4. **Several people at one practice on the same day is fine.** The rule is about the
+   person, not the practice: **never email the same person twice in a week**. Eric,
+   2026-08-27, correcting the earlier staggering rule.
 
 ## What the message is
 
