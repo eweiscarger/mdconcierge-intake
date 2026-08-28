@@ -387,11 +387,13 @@ async function run() {
     // mail renders. Clicking it suppresses them and moves them to Unsubscribed, which drops
     // them out of the cadence pool for good.
     await ensureToken(p);
+    // touchBody already closes with the soft opt-out and the signature. All that is
+    // missing is the real unsubscribe link, so only that is added. Appending the
+    // signature again here is what put two of them, and two opt-outs, on every email.
     const bodyText = touchBody(touch, p, hook)
       + `
-${TEXT_SIG}
 
-If you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(p.funnel_token || '')}`;
+If you would rather I stop entirely, click here: ${STOP(p.funnel_token || '')}`;
     await queueEmail({
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
       subject: SUBJECTS[touch] || SUBJECTS[5], body_text: bodyText,
