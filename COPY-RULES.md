@@ -47,7 +47,11 @@ In this order:
 - **Never em dashes or en dashes.** Periods and commas. Ranges in words: "20 to 30 minutes".
 - **Never "checking in", "circling back", "following up", "touching base", "any thoughts".**
 - **Never invent a number, a name, a legal conclusion or a claim about their business.**
-- **Never ask who else handles this** until a lead has gone quiet. It reads as giving up on them.
+- **Every email closes by asking to be pointed at the right person.** "And if there is someone
+  else in the practice I should be speaking with about this, I would appreciate you pointing me
+  in the right direction, or an introduction if that is easier." On all five touches. Eric,
+  2026-08-27: somebody he trusts does this and it works. This replaces the earlier rule that
+  said never to ask until a lead had gone quiet.
 - **Never a second email inside 18 hours**, and never a same-day "repair" email after a mistake.
   The next contact goes on its normal beat.
 
