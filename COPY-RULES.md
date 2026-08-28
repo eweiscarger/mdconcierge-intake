@@ -47,6 +47,11 @@ In this order:
 - **Never em dashes or en dashes.** Periods and commas. Ranges in words: "20 to 30 minutes".
 - **Never "checking in", "circling back", "following up", "touching base", "any thoughts".**
 - **Never invent a number, a name, a legal conclusion or a claim about their business.**
+- **One exit, in the footer.** The soft opt-out does not sit in the body, where it lands under
+  the request for an introduction and hands the physician the easier answer last. Touches one
+  to four close on the ask, with "If you are not interested, just reply and say so, or click
+  here and I will not write again" in the footer. Touch five keeps it in the body, because
+  that email exists to give him the out.
 - **Every email closes by asking to be pointed at the right person.** "And if there is someone
   else in the practice I should be speaking with about this, I would appreciate you pointing me
   in the right direction, or an introduction if that is easier." On all five touches. Eric,
