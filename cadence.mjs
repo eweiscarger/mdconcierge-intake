@@ -199,6 +199,10 @@ function touchBody(touch, p, hook) {
   const staff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
   const to = staff ? `${p.first_name || ''},`.trim() : `Dr. ${p.last_name || ''},`.trim();
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
+  // Every email closes by asking to be pointed at the right person. Eric, 2026-08-27:
+  // somebody he trusts does this and it works. It supersedes the older rule about not
+  // asking who else handles this until a lead has gone quiet.
+  const referral = "\n\nAnd if there is someone else in the practice I should be speaking with about this, I would appreciate you pointing me in the right direction, or an introduction if that is easier.";
   const optout = "\n\nIf you aren't interested, just reply and say so and I won't write again.";
   // A letter that ends on a bare name and a phone number reads like a note passed in a corridor.
   // The text half carries the same details the signature block shows, typed out.
@@ -215,7 +219,7 @@ No prior authorizations and no denials while the claim is open or in litigation.
 
 You can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened it up for physicians. If you would rather I send you the detail, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).
 
-How often does that happen with your work comp patients?` + optout + sig;
+How often does that happen with your work comp patients?` + referral + optout + sig;
   }
 
   if (touch === 2) {
@@ -227,7 +231,7 @@ We have a mail order pharmacy program built for work comp claims. If the prescri
 
 It is mail order only. Nothing is stocked in your office. You e-prescribe the way you do now and change the pharmacy in the EHR, and MDRx handles the billing and the collections.
 
-If you want to know what it would ask of your office, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). Call, text, email or video, whichever you prefer.` + optout + sig;
+If you want to know what it would ask of your office, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). Call, text, email or video, whichever you prefer.` + referral + optout + sig;
   }
 
   if (touch === 3) {
@@ -239,7 +243,7 @@ A carrier could refuse to pay by pointing at Pennsylvania's anti-referral statut
 
 Daniel Siegel argued the case and won it. [His write-up is short](https://mdconcierge.net/go.html?p=${t}&to=siegel).
 
-Alice Gosfield wrote up what it means for physicians. She concludes: "For physicians who were wary of even trying this model, it is now worth reconsidering." [Hers is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).` + optout + sig;
+Alice Gosfield wrote up what it means for physicians. She concludes: "For physicians who were wary of even trying this model, it is now worth reconsidering." [Hers is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).` + referral + optout + sig;
   }
 
   if (touch === 4) {
@@ -253,7 +257,7 @@ One document and you are in. You can participate individually or through the pra
 
 [Here is how it works end to end](https://mdconcierge.net/brief.html?p=${t}).
 
-If you would rather talk it through, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).` + optout + sig;
+If you would rather talk it through, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).` + referral + optout + sig;
   }
 
   // Touch 5 asks for nothing. It names the one real limit and leaves the door open.
@@ -267,7 +271,7 @@ If the economics are not for you, I would still ask you to consider it for the p
 
 [The June decision](https://mdconcierge.net/go.html?p=${t}&to=decision), [Siegel's analysis](https://mdconcierge.net/go.html?p=${t}&to=siegel) and [Gosfield's](https://mdconcierge.net/go.html?p=${t}&to=gosfield) stay up whenever they are useful.
 
-If it becomes relevant, reply, or [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk) and I will pick it up from there.` + optout + sig;
+If it becomes relevant, reply, or [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk) and I will pick it up from there.` + referral + optout + sig;
 }
 
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
