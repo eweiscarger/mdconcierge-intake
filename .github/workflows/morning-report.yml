@@ -1,0 +1,34 @@
+name: Morning send report
+# One email after the morning send window closes, saying what actually left the building.
+# Eric, 2 Sep 2026: he wants confirmation they went out, not another per-run note from inside
+# a single pass. The last physician in a morning batch is scheduled around 11:30 UTC, so this
+# runs at 12:30 UTC (8:30am ET) once the window is done.
+on:
+  schedule:
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: morning-report
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Report what went out
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node morning-report.mjs
