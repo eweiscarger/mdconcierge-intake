@@ -319,6 +319,22 @@ const SUBJECTS = {
 };
 
 async function run() {
+  const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
+  if (!cfg.warmup_started_at) await sPatch('outreach_config?id=eq.1', { warmup_started_at: today() });
+  // Batch size: explicit BATCH_SIZE override (manual first batch), else the daily cap. Eric self-throttles by approving fewer.
+  const cap = Number(process.env.BATCH_SIZE) || Number(cfg.daily_send_cap) || 20;
+
+  // Publish the touch templates so the CRM compose box can offer them as a dropdown.
+  // The cadence stays the single source of truth; this is a one-way mirror with the merge
+  // tokens left in, so the CRM can substitute the doctor it is actually looking at.
+  const TOUCH_LABELS = { 1: 'Touch 1 · the patient never filled it', 2: 'Touch 2 · prior auths and the front desk', 3: 'Touch 3 · what changed in june', 4: 'Touch 4 · the economics', 5: 'Touch 5 · leaving it here' };
+  for (const n of [1, 2, 3, 4, 5]) {
+    const stub = { last_name: '{{last}}', funnel_token: '{{token}}' };
+    await sPost('mdrx_templates',
+      { touch_no: n, label: TOUCH_LABELS[n], subject: SUBJECTS[n] || '', body_text: touchBody(n, stub), updated_at: new Date().toISOString() },
+      'resolution=merge-duplicates,return=minimal');
+  }
+
   // Recycle Not-Now leads whose recycle date arrived.
   const rec = await sGet(`mdrx_providers?select=id,recycle_round&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
   for (const r of rec) await sPatch(`mdrx_providers?id=eq.${r.id}`, { funnel_stage: 'Queued', touch_count: 0, next_step: 'Touch 1', funnel_next_date: today(), recycle_date: null, recycle_round: (r.recycle_round || 0) + 1 });
