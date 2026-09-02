@@ -138,7 +138,12 @@ export function emailFaults(m) {
 
   // The opt-out has to exist in both halves, and must never be the first thing he reads. It once
   // rendered above the greeting in every email for two days because a <p> sat outside its <td>.
-  const OPTOUT = /aren't interested|don't wish to hear/i;
+  // Both wordings. The footer the queue builder appends says "If you are not interested" and this
+  // pattern only knew the contraction, so every touch 1 to 4 built after 27 Aug 2026 was refused
+  // for having no opt-out while carrying a perfectly good one: 11 of 11 on 28 Aug, 20 of 20 on
+  // 31 Aug, 26 of 26 on 1 Sep, 27 of 27 on 2 Sep. Touch 5 says "aren't" in its body and passed
+  // throughout, which is what made the failure look like a template problem rather than a regex.
+  const OPTOUT = /(?:are not|aren.t) interested|don.t wish to hear|rather i stop|unsubscribe.html/i;
   // Only campaign mail carries an opt-out. A one to one email Eric writes to a physician he is in
   // conversation with is not marketing, and an unsubscribe line at the bottom of it announces that
   // it is, which is both untrue and the exact impression the letter format exists to avoid. The

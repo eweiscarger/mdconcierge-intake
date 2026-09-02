@@ -197,59 +197,75 @@ const OVERVIEW = (t) =>
 function touchBody(touch, p, hook) {
   const t = p.funnel_token || '';
   const staff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
-  const to = staff ? `${p.first_name || ''},`.trim() : `Dr. ${p.last_name || ''},`.trim();
+  // Eric, 2026-09-02: a bare surname is too cold for a first approach. "Hi" costs nothing and
+  // is how he would open the letter himself. Both gates already allow a greeting word in front
+  // of the name, so this passes unchanged; the designed templates carry the same opener.
+  const to = staff ? `Hi ${p.first_name || ''},`.trim() : `Hi Dr. ${p.last_name || ''},`.trim();
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
-  // Every email closes by asking to be pointed at the right person. Eric, 2026-08-27:
-  // somebody he trusts does this and it works. It supersedes the older rule about not
-  // asking who else handles this until a lead has gone quiet.
-  const referral = "\n\nAnd if there is someone else in the practice I should be speaking with about this, I would appreciate you pointing me in the right direction, or an introduction if that is easier.";
-  // Only the last email carries this in the body. Everywhere else it sat directly under the
-  // request for an introduction, which handed the physician the easier answer and put it last.
-  // It moves to the footer beside the unsubscribe link; touch five keeps it, because that
-  // email exists to give him the out.
-  const optout = touch === 5
-    ? "\n\nIf you aren't interested, just reply and say so and I won't write again."
-    : "";
-  // A letter that ends on a bare name and a phone number reads like a note passed in a corridor.
-  // The text half carries the same details the signature block shows, typed out.
-  const sig = "\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\nReferral Management • Work Comp Pharmacy • Ancillary Coordination\n(570) 817-7569 • eric@mdconcierge.net • mdconcierge.net";
+  // Eric, 2026-09-01: the referral ask is no longer appended to every touch. It belongs in the
+  // last note only, where being passed along is the natural thing to ask for. The blanket append
+  // was the loudest tell that these were automated.
+  const referral = touch === 5
+    ? '\n\nIf someone else in the practice is the right person for this, point me in the right direction.'
+    : '';
+  // The opt-out is appended by send-outreach at render time, under the signature, for campaign
+  // mail only. It is deliberately not in the body: a personal note must not carry one, and the
+  // wire gate at outboundFaults checks for it on campaign mail either way.
+  const optout = '';
+  // Four lines. The services strapline read as a vendor block under a letter.
+  const sig = '\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\n(570) 817-7569\neric@mdconcierge.net\nmdconcierge.net';
 
+  // Touch 1 order is locked: patient problem, mail order, Supreme Court, participation, MDRx,
+  // brief, soft next step. The brief appears on day one because it is the answer to the question
+  // this email creates, and a day-one brief click is the earliest program signal available.
   if (touch === 1) {
     return `${to}
 
-${lead}You write a script for a work comp patient. Three weeks later they are back, no better, and it turns out they never filled it. The carrier denied it at the counter and nobody told you.
+${lead}I work with physicians throughout Pennsylvania on work comp referrals and ancillary programs, and one issue I see constantly is patients having trouble getting their prescriptions filled.
 
-We have a mail order pharmacy program built for work comp claims. You e-prescribe the same way you do now, it ships to the patient's home the next day at no cost to them.
+You write the script, the carrier denies it at the counter, and three weeks later the patient is back in your office no better. Half the time, nobody even told you they never got the medication.
 
-No prior authorizations and no denials while the claim is open or in litigation. MDRx has been doing this for over 10 years with over 400 physicians.
+MDRx is a mail-order pharmacy program built specifically for work comp. You e-prescribe exactly as you do now, and the medication ships directly to the patient, typically the next day, at no cost to them.
 
-You can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened it up for physicians. If you would rather I send you the detail, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).
+There are no prior authorizations or denials while the claim remains open or in litigation. MDRx has been doing this for more than 10 years and works with over 400 physicians.
 
-How often does that happen with your work comp patients?` + referral + optout + sig;
+You can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened this up for physicians.
+
+If you're running into this with your work comp patients, [let me know](https://mdconcierge.net/go.html?p=${t}&to=talk) and I'll send you some information on how the program works.` + referral + optout + sig;
   }
 
   if (touch === 2) {
     return `${to}
 
-A work comp patient calls your office because the pharmacy wants an authorization before it will fill anything. Now someone on your staff is on the phone with an adjuster instead of running your day.
+A work comp patient calls your office because the pharmacy wants an authorization before it will fill the prescription. Now someone on your staff is on the phone with an adjuster instead of running your day.
 
-We have a mail order pharmacy program built for work comp claims. If the prescription comes in, it gets dispensed. No prior authorizations and no denials while the claim is open or in litigation.
+A mail order pharmacy built specifically for work comp avoids a lot of that. If the prescription comes in, it gets dispensed and shipped to the patient, rather than going back through the usual authorization process while the claim is open or in litigation.
 
-It is mail order only. Nothing is stocked in your office. You e-prescribe the way you do now and change the pharmacy in the EHR, and MDRx handles the billing and the collections.
+There is very little for the office to do. Nothing is stocked or dispensed there. You e-prescribe the way you do now and send it to our in-network pharmacy instead of the retail counter.
 
-If you want to know what it would ask of your office, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). Call, text, email or video, whichever you prefer.` + referral + optout + sig;
+The pharmacy dispenses and ships to the patient. MDRx handles the billing and collections from there.
+
+If you want to see what the program actually asks of the physician and the office, [the MDRx brief lays it out here](https://mdconcierge.net/brief.html?p=${t}).
+
+Or [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). Call, text, email or video, whatever is easiest.` + referral + optout + sig;
   }
 
   if (touch === 3) {
     return `${to}
 
-If you were ever told you cannot have an economic interest in the medication your work comp patients are prescribed, that was correct until June.
+If you were ever told that a physician could not have an economic interest in medications prescribed to work comp patients, there was an important development in Pennsylvania in June.
 
-A carrier could refuse to pay by pointing at Pennsylvania's anti-referral statute. In the 700 Pharmacy case the Supreme Court held, 5 to 2, that the prohibition covers only the eight services the statute names, and prescription drugs are not one of them.
+The Pennsylvania Supreme Court decided the 700 Pharmacy case 5 to 2. The Court held that the self-referral prohibition applies to the eight services specifically identified in the statute. Prescription drugs are not one of them.
 
-Daniel Siegel argued the case and won it. [His write-up is short](https://mdconcierge.net/go.html?p=${t}&to=siegel).
+You don't have to take my interpretation of it.
 
-Alice Gosfield wrote up what it means for physicians. She concludes: "For physicians who were wary of even trying this model, it is now worth reconsidering." [Hers is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).` + referral + optout + sig;
+Daniel Siegel argued the case and won it. [His write-up is short and worth reading](https://mdconcierge.net/go.html?p=${t}&to=siegel).
+
+Alice Gosfield also looked specifically at what the decision means for physicians. Her conclusion was: "For physicians who were wary of even trying this model, it is now worth reconsidering." [Her analysis is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
+
+If you would rather read the underlying decision yourself, [it is here](https://mdconcierge.net/go.html?p=${t}&to=decision).
+
+That decision is a big part of why I am reaching out to Pennsylvania physicians now.` + referral + optout + sig;
   }
 
   if (touch === 4) {
@@ -257,13 +273,17 @@ Alice Gosfield wrote up what it means for physicians. She concludes: "For physic
 
 The prescriptions you write for a work comp patient get filled somewhere, billed to the carrier on the state fee schedule, and collected by someone who had no part in the treatment.
 
-Since June that can be your practice instead. You receive 65 percent of what the carrier pays, less what the medication, the dispensing and the shipping cost. MDRx does the billing and carries the risk of collecting.
+MDRx allows the prescribing physician or practice to participate in that pharmacy revenue without owning, operating or staffing a pharmacy.
 
-One document and you are in. You can participate individually or through the practice, whichever suits.
+By working through MDRx and our pharmacy partners, the medication dispensing and billing will be handled for you, you will receive 65 percent of what is collected, less the cost of the medication, dispensing and shipping. Alice Gosfield calls this a factoring model and says that for physicians who were wary of even trying it, it is now worth reconsidering, [you can read her take here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
 
-[Here is how it works end to end](https://mdconcierge.net/brief.html?p=${t}).
+That is really the model.
 
-If you would rather talk it through, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk).` + referral + optout + sig;
+[The MDRx brief shows how it works from prescription through collection](https://mdconcierge.net/brief.html?p=${t}).
+
+If you read it and want to understand what participation would look like for you or the practice, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). I'm happy to walk through it.
+
+If you read it and decide it isn't for you, that is fine too.` + referral + optout + sig;
   }
 
   // Touch 5 asks for nothing. It names the one real limit and leaves the door open.
@@ -271,13 +291,21 @@ If you would rather talk it through, [tell me the best way to reach you](https:/
 
 Last note from me so I am not crowding your inbox.
 
-The program is workers compensation only. Not Medicare, not Medicaid, not any federal program. If work comp is not a real part of your practice then none of this was ever relevant, and that is a perfectly good answer.
+MDRx is workers' compensation only. Not Medicare, Medicaid or any federal program.
 
-If the economics are not for you, I would still ask you to consider it for the patient side alone. Your patients receive one hundred percent of their medication at no cost, delivered to their home the next day.
+If work comp is not a meaningful part of your practice, this probably is not worth your time.
 
-[The June decision](https://mdconcierge.net/go.html?p=${t}&to=decision), [Siegel's analysis](https://mdconcierge.net/go.html?p=${t}&to=siegel) and [Gosfield's](https://mdconcierge.net/go.html?p=${t}&to=gosfield) stay up whenever they are useful.
+If it is, I've tried to give you enough information to understand the program without having to sit through a sales call first.
 
-If it becomes relevant, reply, or [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk) and I will pick it up from there.` + referral + optout + sig;
+[The MDRx brief explains the program end to end](https://mdconcierge.net/brief.html?p=${t}).
+
+[Daniel Siegel explains the June Supreme Court decision](https://mdconcierge.net/go.html?p=${t}&to=siegel), and [Alice Gosfield explains what it means for physicians](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
+
+If the economics are not of interest, there is still a patient side to it. The program is designed to get work comp patients their medication without the usual pharmacy and authorization problems, shipped directly to their home at no cost while the claim is open or in litigation.
+
+If you get through the information and think it is worth looking at, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk) and I'll pick it up from there.
+
+Otherwise, I'll leave it here.` + referral + optout + sig;
 }
 
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
@@ -291,22 +319,6 @@ const SUBJECTS = {
 };
 
 async function run() {
-  const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
-  if (!cfg.warmup_started_at) await sPatch('outreach_config?id=eq.1', { warmup_started_at: today() });
-  // Batch size: explicit BATCH_SIZE override (manual first batch), else the daily cap. Eric self-throttles by approving fewer.
-  const cap = Number(process.env.BATCH_SIZE) || Number(cfg.daily_send_cap) || 20;
-
-  // Publish the touch templates so the CRM compose box can offer them as a dropdown.
-  // The cadence stays the single source of truth; this is a one-way mirror with the merge
-  // tokens left in, so the CRM can substitute the doctor it is actually looking at.
-  const TOUCH_LABELS = { 1: 'Touch 1 · the patient never filled it', 2: 'Touch 2 · prior auths and the front desk', 3: 'Touch 3 · what changed in june', 4: 'Touch 4 · the economics', 5: 'Touch 5 · leaving it here' };
-  for (const n of [1, 2, 3, 4, 5]) {
-    const stub = { last_name: '{{last}}', funnel_token: '{{token}}' };
-    await sPost('mdrx_templates',
-      { touch_no: n, label: TOUCH_LABELS[n], subject: SUBJECTS[n] || '', body_text: touchBody(n, stub), updated_at: new Date().toISOString() },
-      'resolution=merge-duplicates,return=minimal');
-  }
-
   // Recycle Not-Now leads whose recycle date arrived.
   const rec = await sGet(`mdrx_providers?select=id,recycle_round&lead_type=eq.funnel&funnel_stage=eq.Not%20Now&recycle_date=lte.${today()}`);
   for (const r of rec) await sPatch(`mdrx_providers?id=eq.${r.id}`, { funnel_stage: 'Queued', touch_count: 0, next_step: 'Touch 1', funnel_next_date: today(), recycle_date: null, recycle_round: (r.recycle_round || 0) + 1 });
@@ -333,7 +345,7 @@ async function run() {
 
   // Behavior-aware pool: only Queued/New/Contacted (NOT Engaged/Replied/Not Interested/Unsubscribed/Won/Lost),
   // due today, with an email, not suppressed. Hottest-first is not needed; go by due date.
-  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,credentials,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(manual_touch_at.is.null,manual_touch_at.lt.${manualCutoff()})&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullsfirst&limit=400`);
+  const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,credentials,practice_name,funnel_token,email,touch_count,funnel_next_date,recycle_round,personalized_opener,email_confidence&lead_type=eq.funnel&funnel_stage=in.(New,Queued,Contacted)&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(manual_touch_at.is.null,manual_touch_at.lt.${manualCutoff()})&or=(funnel_next_date.is.null,funnel_next_date.lte.${today()})&order=funnel_next_date.asc.nullslast&limit=400`);
 
   // What each of them has ACTUALLY been sent, taken from the outbox rather than from touch_count.
   // On 26 Aug 2026 seventeen providers were sitting at touch_count 0 with cold touches already in
@@ -360,8 +372,15 @@ async function run() {
     if (/pattern_initials|pattern/.test(s)) return 4;
     return 2;                                   // unknown confidence sits mid-pack
   };
-  pool.sort((a, b) => (CONF_RANK(a.email_confidence) - CONF_RANK(b.email_confidence))
-    || String(a.funnel_next_date || '').localeCompare(String(b.funnel_next_date || '')));
+  // Confidence used to lead this sort, and it starved the backlog. A lead with no email_confidence
+  // on the record ranks mid-pack and one guessed from an initials pattern ranks last, so David
+  // Rubenstein, due 14 Aug with a null confidence, sat behind every verified address in the pool
+  // every single morning and was nineteen days late by 2 Sep, with thirty three others fifteen or
+  // more days overdue behind him. How long a man has been waiting decides who goes first now.
+  // Confidence still breaks ties, so at equal staleness the safer address is still preferred and
+  // the bounce protection it was put here for is kept.
+  pool.sort((a, b) => String(a.funnel_next_date || '9999-12-31').localeCompare(String(b.funnel_next_date || '9999-12-31'))
+    || (CONF_RANK(a.email_confidence) - CONF_RANK(b.email_confidence)));
 
   let queuedCount = 0; const practicesToday = new Map();
   for (const p of pool) {
