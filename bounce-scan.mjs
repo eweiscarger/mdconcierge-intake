@@ -1,10 +1,14 @@
 // bounce-scan.mjs — deliverability guardrail.
-// Reads eric@ (read-only) for bounce notifications and spam complaints. Hard bounces
-// and complaints are auto-suppressed silently (never emailed again). If the hard-bounce
-// rate over the last 7 days crosses 5% (with enough volume), or any spam complaint
-// lands, it suppresses the address and pulls the lead out. It does NOT pause sending: a wrong
-// address for one physician must never stop the campaign for everyone else. Only a spam
-// complaint pauses, because that threatens the domain rather than one record.
+// Reads eric@ (read-only) for bounce notifications and spam complaints.
+//
+// A bounce removes one lead and tells Eric who it was: the address is suppressed, the record is
+// marked Bad Address, its next date is cleared and anything queued for that mailbox is cancelled.
+// It never touches sending. Eric, 2026-09-02: physicians change practices, so a bounce rate over
+// this list measures the list ageing rather than anything he can act on, and the rate alarms it
+// used to raise were noise arriving every three hours. No rate is computed here any more.
+//
+// A spam complaint is the exception and still stops everything. That is a person reporting us,
+// and it threatens the sending domain rather than one record.
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
@@ -210,17 +214,14 @@ async function main() {
   }
   console.log(`bounce-scan: relocation checks queued ${relocFound}.`);
 
-  // Circuit breaker: high hard-bounce rate or any complaint -> auto-pause + alert.
+  // A spam complaint stops everything. A bounce never does: it removes that one lead and names him.
   const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
-  const sends7 = (await sGet(`mdrx_outbox?select=id&status=eq.sent&sent_at=gte.${daysAgoISO(7)}`)).length;
-  const hard7 = (await sGet(`bounce_events?select=id&bounce_type=eq.hard&occurred_at=gte.${daysAgoISO(7)}`)).length;
-  // Need a real sample before a rate means anything. At 17 sends one guessed address is 6%,
-  // which would pause a healthy campaign over nothing. Complaints still pause instantly below.
-  const MIN_SAMPLE = 50;
-  const rate = sends7 >= MIN_SAMPLE ? hard7 / sends7 : 0;
-  let paused = false, reason = '';
-  if (complaints.length) { paused = true; reason = `spam complaint from ${complaints.join(', ')}`; }
-  else if (rate >= 0.05) { paused = true; reason = `hard-bounce rate ${(rate * 100).toFixed(1)}% (${hard7}/${sends7}) over 7 days`; }
+  // No rate is computed any more. Eric, 2026-09-02: a bounce rate over a list of physicians who
+  // change practices measures the list ageing, not anything he can act on, and it never had any
+  // effect on sending except to raise an alarm every three hours. A complaint is the only thing
+  // here that still means something, and it is not a rate.
+  let reason = '';
+  if (complaints.length) reason = `spam complaint from ${complaints.join(', ')}`;
   // A manual resume has to survive this job. Otherwise the guard deadlocks: the only thing that
   // lowers a bounce RATE is sending more mail, which it will not allow, so a campaign that trips
   // the threshold once can never clear it and is re-paused every three hours forever. While a
@@ -238,16 +239,25 @@ async function main() {
   if (complaintOnly && !cfg.sending_paused && !snoozed) {
     await sPatch('outreach_config?id=eq.1', { sending_paused: true, pause_reason: reason });
     await alertEric('[MDconcierge] outreach PAUSED, spam complaint', `Sending is paused because someone reported the mail as spam, which puts the domain at risk.\n\nReason: ${reason}\n\nThat address is suppressed. Resume from the Cockpit once you are happy.`);
-  } else if (paused && !complaintOnly) {
-    await alertEric('[MDconcierge] bounce rate high, sending left ON', `Bounce rate is ${reason}.\n\nThe bounced addresses are suppressed and their leads pulled out. Sending has NOT been paused: the fix is address quality, not stopping the campaign.\n\nWorth checking which practices those addresses belong to.`);
-  } else if (paused && snoozed) {
-    await alertEric('[MDconcierge] deliverability still poor, not re-pausing', `You resumed sending, so this is a warning rather than a pause.
-
-Reason: ${reason}
-
-The override holds until ${cfg.pause_snooze_until}. Address quality is the fix; the guard is only the alarm.`);
   }
-  console.log(`bounce-scan: hard=${newHard.length} complaints=${complaints.length} | 7d rate ${(rate * 100).toFixed(1)}% (${hard7}/${sends7})${paused ? ' | PAUSED' : ''}`);
+
+  // The names, which is what he asked for. One mail per scan listing who bounced and came out of
+  // the cadence, so a dead address is a thing he can go and fix rather than a percentage.
+  if (newHard.length) {
+    const rows = await sGet(`mdrx_providers?select=first_name,last_name,credentials,practice_name,email&email=in.(${newHard.map((e) => `"${e}"`).join(',')})`);
+    const line = (r) => `${r.first_name || ''} ${r.last_name || ''}${r.credentials ? ', ' + r.credentials : ''}`.trim()
+      + ` (${r.practice_name || 'practice unknown'})` + `\n    ${r.email}`;
+    const named = (rows || []).map(line);
+    // An address with no provider row behind it still gets reported, by address.
+    const known = new Set((rows || []).map((r) => String(r.email || '').toLowerCase()));
+    for (const e of newHard) if (!known.has(String(e).toLowerCase())) named.push(String(e));
+    await alertEric(`[MDconcierge] ${newHard.length} address(es) bounced, removed from the cadence`,
+      `These bounced and are out of the cadence. Nothing else changed and sending was not touched.\n\n  `
+      + named.join('\n\n  ')
+      + `\n\nEach one is suppressed, marked Bad Address, and anything queued for it was cancelled.`
+      + ` Put a working address on the record and it re-enters the cadence on its own.`);
+  }
+  console.log(`bounce-scan: hard=${newHard.length} complaints=${complaints.length}${complaints.length ? ' | PAUSED' : ''}`);
 }
 
 main().catch(async (e) => {
