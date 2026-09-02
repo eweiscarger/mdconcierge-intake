@@ -67,7 +67,7 @@ function mergeEngaged(n, p, bodyFn){
     .split('{{body}}').join(engagedHtmlBody(bodyFn(n, p)))
     .split('{{signature}}').join(SIGNATURE_HTML)
     .split('{{last}}').join(p.last_name || '')
-    .split('{{optout}}').join('If you aren\'t interested, or don\'t wish to hear from me anymore, <a href="' + STOP(p.funnel_token || '') + '" style="color:#9aa3af;">click here</a> and I won\'t write again.')
+    .split('{{optout}}').join('I don\'t want to bother you if not interested, <a href="' + STOP(p.funnel_token || '') + '" style="color:#9aa3af;">click here</a> if you would no longer like to hear from me.')
     .split('{{token}}').join(p.funnel_token || '');
 }
 // No per-lead opener line. A generic specialty statement reads as filler to a physician
@@ -436,9 +436,10 @@ async function run() {
     // missing is the real unsubscribe link, so only that is added. Appending the
     // signature again here is what put two of them, and two opt-outs, on every email.
     // Touch five already said it in the body, so its footer is only the link.
-    const footer = touch === 5
-      ? `\n\nIf you would rather I stop entirely, click here: ${STOP(p.funnel_token || '')}`
-      : `\n\nIf you are not interested, just reply and say so, or click here and I will not write again: ${STOP(p.funnel_token || '')}`;
+    // Eric, 2026-09-02. One line, his words, under the signature, the same on all five. It used to
+    // be two wordings and neither matched what the gates were looking for, which is what stopped
+    // the cold mail for six days.
+    const footer = `\n\nI don't want to bother you if not interested, [click here](${STOP(p.funnel_token || '')}) if you would no longer like to hear from me.`;
     const bodyText = touchBody(touch, p, hook) + footer;
     await queueEmail({
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
@@ -490,7 +491,7 @@ async function run() {
         + `You can participate individually or through the practice, whichever suits.\n\n`
         + `If you would like someone to reach out directly, tell us the best way to reach you here: ${link(t, 'talk')}\n\n`
         + `Or if you would rather pick a time yourself, see my calendar: ${link(t, 'book')}\n\n`
-        + `Best,\n${TEXT_SIG}\n\nIf you aren't interested, or don't wish to hear from me anymore, click here and I won't write again: ${STOP(t)}`;
+        + `Best,\n${TEXT_SIG}\n\nI don't want to bother you if not interested, [click here](${STOP(t)}) if you would no longer like to hear from me.`;
 
       await queueEmail({
         _last: p.last_name, provider_id: p.id, touch_no: 0, to_email: p.email,
