@@ -1,5 +1,9 @@
 # Agent doctrine
 
+> **Superseded by RULES.md.** Read that first. Anything here that contradicts it is dead.
+> This file is kept for background and examples only.
+
+
 One source. Every agent that writes, replies, classifies or schedules on Eric's behalf loads this.
 
 It exists because the same rules are currently pasted into two separate 12,000 character prompts,

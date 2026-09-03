@@ -1,5 +1,9 @@
 # Marketing playbook — work comp pharmacy
 
+> **Superseded by RULES.md.** Read that first. Anything here that contradicts it is dead.
+> This file is kept for background and examples only.
+
+
 **Scope: the MDRx workers' compensation pharmacy program, sold to physicians.** MDconcierge runs
 several service lines (referral management and medical coordination, mail-order pharmacy, single-use
 injection kits, ancillary coordination) and they are not sold the same way to the same people. This

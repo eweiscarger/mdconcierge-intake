@@ -1,5 +1,9 @@
 # MESSAGING & CONTENT STRATEGY — hero / villain, standing themes, news agent
 
+> **Superseded by RULES.md.** Read that first. Anything here that contradicts it is dead.
+> This file is kept for background and examples only.
+
+
 This governs every marketing asset and every agent. It sits on top of the messaging source of
 truth (the model facts and legal grounding). No em-dashes anywhere customer-facing. Never say
 "gray area."

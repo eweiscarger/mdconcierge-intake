@@ -1,5 +1,9 @@
 # Physician FAQ — source answers
 
+> **Superseded by RULES.md.** Read that first. Anything here that contradicts it is dead.
+> This file is kept for background and examples only.
+
+
 **Status: source of truth, not published copy.** These are Eric's own answers, given 2026-08-26, to
 the questions a physician arrives with after reading the decision page, the brief, Siegel and
 Gosfield. Nothing here has been put on a page, in an email, or in front of a physician.

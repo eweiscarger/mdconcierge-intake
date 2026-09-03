@@ -1,5 +1,9 @@
 # Pharmacy economics: how the two structures actually compare
 
+> **Superseded by RULES.md.** Read that first. Anything here that contradicts it is dead.
+> This file is kept for background and examples only.
+
+
 **Source: Eric, 2026-08-26.** These are structural facts, not estimates. Any formulary comparison,
 past or future, must use these definitions. Getting the COGS treatment wrong flips the answer.
 

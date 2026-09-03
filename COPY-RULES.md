@@ -1,5 +1,9 @@
 # Copy rules
 
+> **Superseded by RULES.md.** Read that first. Anything here that contradicts it is dead.
+> This file is kept for background and examples only.
+
+
 Every outbound email is checked against this before it is shown to Eric. These are not
 suggestions and they are not to be re-derived each time. Each line is here because Eric had to
 say it at least once.
