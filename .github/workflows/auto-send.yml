@@ -20,7 +20,7 @@ on:
         default: ''
 
   schedule:
-    - cron: '*/15 10-21 * * 1-5'   # 10:00-21:00 UTC, weekdays: covers 6:30am ET through 1pm PT
+    - cron: '*/15 10-21 * * *'   # 10:00-21:00 UTC, weekdays: covers 6:30am ET through 1pm PT
 
 concurrency:
   group: auto-send
@@ -40,6 +40,9 @@ jobs:
           MDC_CRON_SECRET: ${{ secrets.MDC_CRON_SECRET }}
           IDS: ${{ github.event.inputs.ids }}
         run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
           # Sending one specific row on demand, rather than everything that happens to be due. A run
           # meant to release a single held email must never become a send of the whole queue.
           if [ -n "$IDS" ]; then

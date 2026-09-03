@@ -4,7 +4,7 @@ name: Smart next-move agent
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '23 12 * * 1-5'   # weekdays ~8:23am ET
+    - cron: '23 12 * * *'   # weekdays ~8:23am ET
 
 concurrency:
   group: next-move
@@ -30,4 +30,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: node next-move.mjs
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          node next-move.mjs

@@ -6,7 +6,7 @@ name: Outreach cadence
 # physician never receives an automated follow-up.
 on:
   schedule:
-    - cron: '10 12 * * 1-5'   # weekdays ~8:10am ET
+    - cron: '10 12 * * *'   # weekdays ~8:10am ET
   workflow_dispatch:
     inputs:
       tier:
@@ -46,4 +46,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           BATCH_SIZE: ${{ github.event.inputs.limit }}
-        run: node cadence.mjs
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          node cadence.mjs

@@ -6,7 +6,7 @@ name: Overdue escalation
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '40 12 * * 1-5'   # weekday mornings, ~8:40am ET, after the cadence and next-move
+    - cron: '40 12 * * *'   # weekday mornings, ~8:40am ET, after the cadence and next-move
 
 concurrency:
   group: overdue-escalation
@@ -26,4 +26,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
-        run: node overdue-escalation.mjs
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          node overdue-escalation.mjs
