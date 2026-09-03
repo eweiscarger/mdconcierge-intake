@@ -18,8 +18,13 @@ say it at least once.
 3. **One email per physician.** Never address two or three people in one note, even partners.
    Each gets their own tracking token, and the familiarity line varies per person.
 4. **Several people at one practice on the same day is fine.** The rule is about the
-   person, not the practice: **never email the same person twice in a week**. Eric,
-   2026-08-27, correcting the earlier staggering rule.
+   person, not the practice.
+5. **The sequence is the spacing.** Eric, 2026-09-02: "kill my rule, follow the sequence."
+   The old never-twice-in-a-week rule is **retired**; where it and the sequence disagreed, the
+   sequence wins. Three days after touch 1, five after touch 2, seven after touch 3, and seven
+   for anyone past the end of it. This is enforced at the wire in send-outreach, measured from
+   the later of the last send and `last_touch_at`, so a lead answered by hand counts. A row that
+   is early is not dropped, it is given the date it may go on.
 
 ## What the message is
 
