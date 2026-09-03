@@ -106,10 +106,20 @@ Enforced at the wire in `send-outreach`, measured from **the later of the last s
 `last_touch_at`**, so a lead Eric answered by hand counts. A row that is early is never dropped; it
 is given the date it may go on and sends itself then.
 
-**Send window: before clinic, 06:30 to 07:30 Eastern, and nothing else.** Eric, 2026-09-03:
-*"going forward it is before clinic for all automation."* The lunch window has been removed from
-`outreach_config.send_windows` entirely rather than left as a fallback the wire can drift into,
-which is exactly how a batch ended up at midday.
+**Send window: before clinic, 06:30 to 07:30 Eastern, Monday to Friday, and nothing else.**
+Eric, 2026-09-03: *"going forward it is before clinic for all automation."* The lunch window has
+been removed from `outreach_config.send_windows` entirely rather than left as a fallback the wire
+can drift into, which is exactly how a batch ended up at midday.
+
+**Five mornings, Monday included.** Eric, 2026-09-03. Two settings have to agree for this, and both
+are now set: the window's own `days` list, and `send_rules.avoid_monday_morning`, which quietly
+skipped any window starting before noon on a Monday. With either one wrong Monday goes dark while
+the config still reads correctly.
+
+**Weekends never.** `avoid_weekends` holds in the wire, the workflows stop themselves on Saturday
+and Sunday, and any hand-dated row must be checked against the calendar before it is written. Five
+rows were once dated for a Sunday because a due date was taken literally without asking what day it
+landed on.
 
 **The queue goes out daily.** If a morning passes with nothing sent, that is a fault, not a quiet
 day. Schedules run every day in cron and stop themselves at the weekend inside the job, because
