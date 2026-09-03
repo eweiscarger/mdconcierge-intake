@@ -5,7 +5,7 @@ name: Morning send report
 # runs at 12:30 UTC (8:30am ET) once the window is done.
 on:
   schedule:
-    - cron: '30 12 * * 1-5'
+    - cron: '30 12 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -31,4 +31,8 @@ jobs:
           MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: node morning-report.mjs
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          node morning-report.mjs
