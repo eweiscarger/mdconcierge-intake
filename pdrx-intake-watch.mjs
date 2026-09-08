@@ -22,6 +22,41 @@ const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
 const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
 const sPatch = async (p, b) => fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: H, body: JSON.stringify(b) });
+const sPost = async (p, b) => fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'POST', headers: H, body: JSON.stringify(b) });
+
+// Match the intake to a CRM record. The signer is the physician; the submitter may be his office
+// manager, so try the signer first and fall back. No match is reported rather than guessed at,
+// because filing an executed intake against the wrong practice is worse than not filing it.
+async function findProvider(p) {
+  const pr = p.practice || {}, sub = p.submitter || {};
+  for (const email of [pr.signer_email, sub.email].filter(Boolean)) {
+    const e = String(email).trim().toLowerCase();
+    if (!e || e.endsWith('@mdconcierge.net')) continue;          // never match on our own address
+    const rows = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_id,stage`
+      + `&or=(email.ilike.${encodeURIComponent(e)},personal_email.ilike.${encodeURIComponent(e)})&limit=1`);
+    if (rows && rows[0]) return rows[0];
+  }
+  return null;
+}
+
+// The completed intake, filed on the physician's record as a document he can open later. Stored
+// as the same HTML that was emailed, so what is on file is exactly what the pharmacy received.
+async function fileOnProfile(prov, html, name) {
+  const path = `p${prov.id}/${Date.now()}_PDRx-intake.html`;
+  const up = await fetch(`${SUPABASE_URL}/storage/v1/object/documents/${path}`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'text/html' },
+    body: html,
+  });
+  if (!up.ok) { console.error('  storage upload failed: ' + up.status + ' ' + (await up.text()).slice(0, 160)); return false; }
+  const r = await sPost('mdrx_documents', {
+    provider_id: prov.id, practice_id: prov.practice_id || null,
+    name: `PDRx intake, ${name}.html`, path, size: Buffer.byteLength(html), content_type: 'text/html',
+    uploaded_by: 'intake form',
+  });
+  if (!r.ok) { console.error('  document row failed: ' + r.status); return false; }
+  return true;
+}
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const val = (s) => (s == null || s === '') ? '<span style="color:#b0453a;">not given</span>' : esc(s);
@@ -84,10 +119,34 @@ async function main() {
     const p = r.payload || {};
     const name = (p.practice && p.practice.legal_name) || r.org_name || 'a practice';
     try {
+      // Submitting the intake is the close. Move the record, file the form on it, and note it.
+      const prov = await findProvider(p);
+      let filed = '';
+      if (prov) {
+        const who = `${prov.first_name || ''} ${prov.last_name || ''}`.trim();
+        const filedOk = await fileOnProfile(prov, card(p), name);
+        await sPatch(`mdrx_providers?id=eq.${prov.id}`, {
+          stage: 'signed', status: 'active', on_hold: true,
+          next_action: 'Intake received. Send it to the pharmacy.', next_action_date: null,
+        });
+        await sPost('mdrx_activity', {
+          provider_id: prov.id, type: 'note', subject: 'PDRx account intake submitted',
+          notes: `Completed the account intake for ${name}. Stage moved to signed`
+            + (filedOk ? ' and the form filed on this record under Documents.' : ', but the form could not be filed, so it is in the email only.'),
+          created_by: 'system',
+        });
+        filed = `<p style="font-size:13px;color:#1e7a4d;margin:0 0 14px;"><b>${esc(who)}</b> moved to <b>signed</b> in the CRM`
+          + (filedOk ? ', and this form is filed on his record under Documents.' : '. The form could not be filed, so this email is the only copy.') + '</p>';
+        console.log(`  matched provider ${prov.id} (${who}), stage -> signed, filed: ${filedOk}`);
+      } else {
+        filed = '<p style="font-size:13px;color:#b0453a;margin:0 0 14px;"><b>No CRM record matched this intake</b>, '
+          + 'so nothing was moved or filed. Link it to the right physician by hand and the next one will match.</p>';
+        console.log('  no provider matched.');
+      }
       await t.sendMail({
         from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER,
         subject: `PDRx intake, ${name}`,
-        html: card(p),
+        html: filed + card(p),
         headers: { 'X-MDC-Bot': 'engine', 'X-MDC-Auto': 'pdrx-intake' },
       });
       // Stamped only after the send succeeds, so a mail failure means it goes out next run
