@@ -9,6 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import nodemailer from 'nodemailer';
 import { readFileSync } from 'node:fs';
 import { emailFaults, linkLabel, optOutLine } from './check.mjs';
+import { templateForAngle, renderTemplate } from './email-templates/next-move.mjs';
 
 const { ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -144,6 +145,8 @@ function draftToCard(draft, p) {
 async function promoteDueMoves() {
   const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft,subject&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
   if (!due || !due.length) return 0;
+  // Eric's real openings, phrased his way, for the {{days}} token.
+  const slotPhrase = await availabilityPhrase();
   // One pending email per physician. Two in the queue for the same doctor is how he gets two.
   const open = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
   const already = new Set((open || []).map((x) => x.provider_id));
@@ -151,14 +154,33 @@ async function promoteDueMoves() {
   for (const mv of due) {
     if (String(mv.channel || 'email') !== 'email') continue;   // calls stay recommendations
     if (already.has(mv.provider_id)) continue;
-    const [p] = await sGet(`mdrx_providers?select=id,first_name,last_name,credentials,email,funnel_token,funnel_stage,suppressed,on_hold&id=eq.${mv.provider_id}`);
+    const [p] = await sGet(`mdrx_providers?select=id,first_name,last_name,credentials,email,funnel_token,funnel_stage,suppressed,on_hold,state&id=eq.${mv.provider_id}`);
     // A recommendation made last week must not go out to a lead Eric has since pulled off
     // automation. The hold is checked at the moment of queueing, not only at the moment of drafting.
     if (!p || !p.email || p.suppressed || p.on_hold) continue;
     // The model sometimes writes a subject line into the body. The row already carries its own
     // subject, so left in it would print "Subject: A couple of times this week" above the greeting.
-    const draft = String(mv.draft || '').replace(/^[ \t]*subject:[^\n]*\n+/i, '').trim();
-    if (!draft) continue;
+    // The agent decides WHO and WHICH SITUATION. It does not decide what to say. Its own prose is
+    // never sent: 176 distinct angles across 196 moves is what that produced, including a retired
+    // subject line and a reply to an out-of-office. Eric's six approved templates are the only
+    // words that leave here, and anything they do not cover goes back to him as a recommendation.
+    const tplKey = templateForAngle(mv.angle);
+    if (!tplKey) {
+      console.log(`next-move: move ${mv.id} ("${String(mv.angle || '').slice(0, 60)}") matches no approved template. Left as a recommendation.`);
+      continue;
+    }
+    const draft = renderTemplate(tplKey, {
+      last: p.last_name || '', first: p.first_name || '',
+      days: slotPhrase,
+      booklink: p.funnel_token ? `${SITE}/go.html?p=${p.funnel_token}&to=book` : '',
+      // A template whose tokens cannot all be filled renders null, which sends it back to Eric
+      // rather than out with a brace still in the text.
+      when: mv.when || '', introducer: mv.introducer || '', state: p.state || '',
+    });
+    if (!draft) {
+      console.log(`next-move: move ${mv.id} matched ${tplKey} but the record lacks something it needs. Left as a recommendation.`);
+      continue;
+    }
     // These are not marketing. A follow-up Eric sends to one physician he is talking to gets no
     // unsubscribe line and no campaign card: an opt-out at the bottom announces the email as a
     // mailshot, which is untrue and is the impression a letter exists to avoid. The sender renders
@@ -191,7 +213,7 @@ async function promoteDueMoves() {
       status: 'pending', scheduled_date: today,
       // plain, not personal. Personal renders a letter with the designed signature, which is an
       // HTML part and a remote image, and Eric has taken HTML out of everything that goes out.
-      objective: mv.angle || null, template_key: 'plain', channel: 'email',
+      objective: mv.angle || null, template_key: tplKey, channel: 'email',
     });
     await sPatch(`mdrx_next_moves?id=eq.${mv.id}`, { status: 'queued', resolved_at: new Date().toISOString() });
     already.add(p.id);
@@ -274,6 +296,19 @@ async function approvedStoriesFor(state) {
   return fit.slice(0, 4).map((c) => ({
     id: c.id, theme: c.theme, headline: c.headline, the_story: c.draft_hook, source: c.source_title,
   }));
+}
+
+// openSlots returns phrases like "Tuesday, open most of the day". Dropped straight into
+// "I am open ..." that reads "I am open Tuesday, open most of the day and Wednesday, open most of
+// the day". This reduces each to its day and stitches them the way Eric says it out loud.
+async function availabilityPhrase() {
+  const slots = (await openSlots()).slice(0, 2);
+  if (!slots.length) return 'most of Tuesday, Wednesday and Friday';
+  const days = slots.map((s) => (String(s).match(/^[A-Za-z]+/) || [''])[0]).filter(Boolean);
+  if (!days.length) return 'most of Tuesday, Wednesday and Friday';
+  const mostly = slots.every((s) => /most of the day/i.test(String(s)));
+  const joined = days.length === 1 ? days[0] : days.slice(0, -1).join(', ') + ' and ' + days[days.length - 1];
+  return mostly ? `most of ${joined}` : joined;
 }
 
 async function openSlots() {
