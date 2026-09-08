@@ -1,0 +1,33 @@
+name: PDRx intake watch
+
+# A physician who fills in the account intake gets a thank-you screen. Until this existed,
+# that was the end of it: the row landed in signup_submissions and nothing told anybody, so
+# a completed intake could sit for days while the doctor waited to hear back.
+#
+# Runs every 15 minutes, every day. An intake can arrive on a Sunday evening and it should not
+# wait until Monday, so unlike the outreach jobs this one deliberately does not stop at the
+# weekend. Each intake is emailed once and then stamped, so re-runs are harmless.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '*/15 * * * *'
+
+concurrency:
+  group: pdrx-intake-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Email any new PDRx intake
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+        run: node pdrx-intake-watch.mjs
