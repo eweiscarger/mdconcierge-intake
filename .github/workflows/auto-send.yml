@@ -20,7 +20,11 @@ on:
         default: ''
 
   schedule:
-    - cron: '*/15 10-21 * * *'   # 10:00-21:00 UTC, weekdays: covers 6:30am ET through 1pm PT
+    - cron: '*/15 10-21 * * *'   # 6am to 5pm Eastern, the before-clinic window
+    # Eric, 8 Sep 2026: one batch goes out Thursday evening instead of before clinic, because the
+    # physicians who read these do it at night. 8pm Eastern is midnight UTC, which the band above
+    # does not reach. Thursday 8pm ET is Friday 00:00 UTC, hence day 5 here.
+    - cron: '*/15 0-1 * * 5'   # Friday 00:00-01:00 UTC = Thursday 8pm to 9pm Eastern
 
 concurrency:
   group: auto-send
