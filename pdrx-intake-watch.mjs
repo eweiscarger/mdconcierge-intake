@@ -38,6 +38,16 @@ function card(p) {
 
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:640px;color:#14213d;">
     <p style="font-size:15px;line-height:1.6;">A PDRx account intake has come in. Everything below is exactly as it was entered. Forward this message to the pharmacy as it stands.</p>
+    <!-- Rides at the top of the forwarded mail so the pharmacy never has the account without
+         the person who opened it. -->
+    <div style="border:1px solid #dce6f2;border-left:3px solid #2f5ea8;border-radius:0 10px 10px 0;padding:12px 16px;margin:0 0 18px;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#8b97ac;font-weight:700;">Submitted by</div>
+      <div style="font-size:15px;font-weight:700;color:#14213d;margin-top:2px;">Eric Weiscarger</div>
+      <div style="font-size:13px;color:#5c6b85;">MDconcierge</div>
+      <div style="font-size:12.5px;color:#5c6b85;margin-top:5px;">(570) 817-7569 &nbsp;&middot;&nbsp;
+        <a href="mailto:eric@mdconcierge.net" style="color:#2f5ea8;text-decoration:none;font-weight:600;">eric@mdconcierge.net</a>
+        &nbsp;&middot;&nbsp; mdconcierge.net</div>
+    </div>
     <table style="border-collapse:collapse;font-size:14px;line-height:1.55;">
       ${row('Program', val(p.program))}
       ${row('Practice', val(pr.legal_name))}
