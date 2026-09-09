@@ -1,0 +1,38 @@
+name: Packet access requests
+# Someone forwarded a packet asks for access; doc-access emails Eric once and then nothing ever
+# mentions it again. This keeps reminding him until each request is decided, and reads his replies
+# so he can approve straight from the email.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 12,16,20 * * 1-5'   # 8am, noon and 4pm ET, weekdays
+    - cron: '0 15 * * 6,0'         # once late morning at weekends
+
+concurrency:
+  group: access-nag
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  nag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Chase pending packet access requests
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ZOHO_USER: ${{ secrets.ZOHO_USER }}
+          ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
+          ERIC_APP_PASSWORD: ${{ secrets.ERIC_APP_PASSWORD }}
+          VAPID_PUBLIC: ${{ secrets.VAPID_PUBLIC }}
+          VAPID_PRIVATE: ${{ secrets.VAPID_PRIVATE }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+        run: node access-nag.mjs
