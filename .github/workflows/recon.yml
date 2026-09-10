@@ -1,0 +1,35 @@
+name: Recon (the researcher)
+
+# Studies physicians so nobody writes to a stranger. Runs twice a day on a small batch rather than
+# once on a big one: web search costs money, dossiers go stale slowly, and a steady six a run works
+# through the whole book inside a month without a bill anybody has to think about.
+on:
+  schedule:
+    - cron: '45 11 * * *'   # ~7:45am ET, before next-move plans the day
+    - cron: '45 19 * * *'   # ~3:45pm ET
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'How many physicians to study this run'
+        required: false
+        default: '6'
+      id:
+        description: 'Study one specific lead id, ignoring the queue'
+        required: false
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Study the next physicians on the list
+        run: node recon.mjs --write ${{ github.event.inputs.id && format('--id={0}', github.event.inputs.id) || '' }}
+        env:
+          RECON_LIMIT: ${{ github.event.inputs.limit || '6' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

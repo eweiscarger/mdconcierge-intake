@@ -1,3 +1,16 @@
 node_modules/
 package-lock.json
 .env
+
+# The playbook. This repo is public (see doctrine.mjs for why it has to be), so nothing that says
+# what Eric sells, how he says it, or what the economics are belongs in it. These live in the
+# private mdrx_doctrine table in Supabase and in eweiscarger/mdconcierge-functions/doctrine.
+RULES.md
+COPY-RULES.md
+SALES-PLAYBOOK.md
+PHARMACY-ECONOMICS.md
+PHYSICIAN-FAQ.md
+AGENT-DOCTRINE.md
+MESSAGING_AND_CONTENT.md
+THE-DESK.md
+prompts.json

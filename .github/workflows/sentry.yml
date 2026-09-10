@@ -1,0 +1,22 @@
+name: Sentry (the watch)
+
+# Every night, decide who is a human being and who is a mail scanner, and move the humans out of
+# the drip. Runs late so it sees the whole day's engagement before it rules on anybody.
+on:
+  schedule:
+    - cron: '15 4 * * *'   # ~12:15am ET, after the day is done
+  workflow_dispatch:
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Separate humans from scanners and promote
+        run: node sentry.mjs --write
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

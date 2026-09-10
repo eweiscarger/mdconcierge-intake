@@ -46,6 +46,10 @@ const CLAIMS_A_DEAL = /as promised|as discussed|as we discussed|per our (convers
 // so "8 to 5" and "570 817 7569" pass, and not matching a date.
 // The language of offering to meet. Kept to phrases that only appear when time is being offered,
 // so a passing mention of a call in a different sort of email does not demand a booking link.
+// The ask Eric actually makes now: a day to stop by, or a window that does not disrupt clinic.
+const OFFERS_TO_STOP_BY = /\bstop (?:by|in)\b|\bcome (?:by|in|through)\b|\bswing (?:by|in)\b|\bdrop (?:by|in)\b/i;
+// Retired 10 September 2026. Also catches the catering-adjacent phrasings that imply one.
+const LUNCH_AND_LEARN = /\blunch and learns?\b|\blunch-and-learns?\b|\bbring lunch\b|\blunch for (?:the|your) (?:staff|office|team)\b/i;
 const OFFERS_TO_MEET = /\bopen (?:most of the day|in the morning|in the afternoon)\b|\b(?:pick|choose|grab) a time\b|\bwhatever time suits\b|\btime that suits\b|\bpropose a time\b|\b(?:here is|here's|off|from) my calendar\b/i;
 // "Eric is", "Eric will", "Eric has". Not "Eric Weiscarger" in the signature, and not a possessive
 // like "Eric's calendar", which is how a person does refer to their own diary in writing.
@@ -84,6 +88,7 @@ export function linkLabel(url) {
   if (to === 'jortho') return 'Read the study';
   if (to === 'pdrx') return 'Open the PDRx formulary and calculator';
   if (to === 'pdrxdeck') return 'the PDRx mail order presentation';
+  if (to === 'pdrxone') return 'PDRX Overview';
   if (to === 'kits') return 'the injection kit list';
   // Wording lifted from touch1.html, where these three already carry approved anchor text. The
   // fallback renderer knew none of them, so an edited email would have printed the raw URL.
@@ -201,9 +206,16 @@ export function emailFaults(m) {
   // has had to say this more times than it is worth: if the email offers time, the calendar link
   // goes in it. Wanting it on its own line so it renders as a button is a matter for the drafter;
   // this only insists it is there at all.
-  if (OFFERS_TO_MEET.test(both) && !/[?&](?:amp;)?to=book\b/i.test(html + text)) {
-    f.push('offers to meet without giving him the calendar link');
+  // Eric changed the ask on 10 September 2026. The calendar produced zero bookings from over a
+  // hundred emails, so the request is now to STOP BY: a day he can come in with coffee, or a time
+  // that does not disrupt clinic. That asks the physician to name a day, not to schedule anything,
+  // and it satisfies this rule on its own. The calendar link is still required when the email
+  // offers TIME and nothing else, because then there is nowhere to go.
+  if (OFFERS_TO_MEET.test(both) && !OFFERS_TO_STOP_BY.test(both) && !/[?&](?:amp;)?to=book\b/i.test(html + text)) {
+    f.push('offers to meet without giving him the calendar link or asking to stop by');
   }
+  // Lunch and learns are retired. Eric is done offering them and does not want one implied either.
+  if (LUNCH_AND_LEARN.test(both)) f.push('offers a lunch and learn, which Eric retired');
   // The email is from Eric. A draft that says "Eric is easy to book with" reads as though somebody
   // else wrote it on his behalf, which is exactly what happened, and the physician can tell. His own
   // name in the sign-off is fine; his name as the subject of a sentence is not.
