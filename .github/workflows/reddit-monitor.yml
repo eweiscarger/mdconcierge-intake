@@ -1,0 +1,40 @@
+name: Reddit monitor (InjuredGuide)
+# Finds Pennsylvania and Delaware people on Reddit asking for help after a work injury or an
+# accident, drafts a helpful reply, and emails Eric one daily digest. Nothing is ever posted.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'scan or digest'
+        required: false
+        default: 'scan'
+  schedule:
+    - cron: '15 11,15,19,23 * * *'   # scan four times a day
+    - cron: '30 12 * * *'            # digest, about 8:30am ET
+
+concurrency:
+  group: reddit-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Reddit monitor
+        env:
+          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '30 12 * * *' && 'digest' || 'scan') }}
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node reddit-monitor.mjs
