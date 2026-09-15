@@ -194,128 +194,39 @@ const PATIENTS_ONLY = () =>
 const OVERVIEW = (t) =>
   `[Here is an overview of how it works](https://mdconcierge.net/brief.html?p=${t}), and you can have more sent to you from that page.`;
 
+// Eric, 15 Sep 2026: the sequence is his own email and three standalone follow-ups, approved word
+// for word. Every touch has to make sense to a physician who never saw the one before it, so each
+// one says what the program is. Plain text, no links: the ask is a reply. Do not edit COLD_OPENER
+// or COLD_BODIES without Eric's approval of the exact wording.
+const COLD_OPENER = "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.";
+const COLD_BODIES = {
+  "1": "If you ever prescribed meds for a work comp patient to a retail pharmacy that didn't get filled and caused a setback for the patient, it is not uncommon. 30% of work comp patients have difficulty getting their medication from this traditional method.\n\nA work comp mail order pharmacy can solve that. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR. And many physicians are not aware that in June, the PA Supreme Court ruled the anti-referral law does not apply to prescription drugs, so carriers cannot deny pharmacy payment on that basis (700 Pharmacy, 6/16/26).\n\nFor years, PBMs that have no involvement in patient care have generated the majority of revenue from prescriptions you write. The Work Comp Research Institute (WCRI) estimates prescription spend at $2,262 per work comp claim. You do all of the work, generate those scripts and never see any of that revenue. A mail order pharmacy program like ours gives you a compliant way to improve patient satisfaction and participate in the pharmacy revenue from scripts you already write. For those 2 reasons alone, wouldn't this be worth considering? Reply send and I will email you more about the PA Supreme Court Ruling and our program by MDRx.\n\nIf this is interesting and there's someone else within the practice I should talk to, I would appreciate the guidance.\n\nIf there is a better email to reach you on or if you would like to discuss in person, I would be happy to stop by the office with coffee.",
+  "2": "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.\n\nMany physicians are not aware that in June, the PA Supreme Court ruled the anti-referral law does not apply to prescription drugs, so carriers cannot deny pharmacy payment on that basis (700 Pharmacy, 6/16/26).\n\nThat matters for a work comp mail order pharmacy program like ours by MDRx. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR. And it gives you a compliant way to participate in the pharmacy revenue from scripts you already write, revenue that has gone to PBMs with no involvement in patient care.\n\nReply send and I will email you more about the ruling and our program.",
+  "3": "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.\n\nIf you have ever sent a work comp script to a retail pharmacy and it didn't get filled, it is not uncommon. 30% of work comp patients have difficulty getting their medication from retail, and it can cause a setback.\n\nA work comp mail order pharmacy solves that. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR.\n\nOur program by MDRx also gives you a compliant way to participate in the pharmacy revenue from scripts you already write.\n\nReply send and I will email you more about the program, or name a day and I will stop by the office with coffee.",
+  "4": "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.\n\nFor years, PBMs that have no involvement in patient care have generated the majority of the revenue from prescriptions you write. WCRI estimates prescription spend at $2,262 per work comp claim. You do the work and never see any of it.\n\nOur work comp mail order pharmacy program by MDRx gives you a compliant way to participate in the pharmacy revenue from scripts you already write. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR.\n\nIf this is interesting and there's someone else within the practice I should talk to, I would appreciate the guidance. Or reply send and I will email you more about the program."
+};
+const COLD_OPTOUT = "If you are not interested or you do not treat work comp patients, simply let me know or reply stop and I will not contact you anymore.";
+
 function touchBody(touch, p, hook) {
-  const t = p.funnel_token || '';
   const staff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
-  // Eric, 2026-09-02: a bare surname is too cold for a first approach. "Hi" costs nothing and
-  // is how he would open the letter himself. Both gates already allow a greeting word in front
-  // of the name, so this passes unchanged; the designed templates carry the same opener.
   const to = staff ? `Hi ${p.first_name || ''},`.trim() : `Hi Dr. ${p.last_name || ''},`.trim();
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
-  // Eric, 2026-09-01: the referral ask is no longer appended to every touch. It belongs in the
-  // last note only, where being passed along is the natural thing to ask for. The blanket append
-  // was the loudest tell that these were automated.
-  const referral = touch === 5
-    ? '\n\nIf someone else in the practice is the right person for this, point me in the right direction.'
-    : '';
-  // The opt-out is appended by send-outreach at render time, under the signature, for campaign
-  // mail only. It is deliberately not in the body: a personal note must not carry one, and the
-  // wire gate at outboundFaults checks for it on campaign mail either way.
-  const optout = '';
-  // Four lines. The services strapline read as a vendor block under a letter.
   const sig = '\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\n(570) 817-7569\neric@mdconcierge.net\nmdconcierge.net';
-
-  // Touch 1 order is locked: patient problem, mail order, Supreme Court, participation, MDRx,
-  // brief, soft next step. The brief appears on day one because it is the answer to the question
-  // this email creates, and a day-one brief click is the earliest program signal available.
-  if (touch === 1) {
-    return `${to}
-
-${lead}I work with physicians throughout Pennsylvania on work comp referrals and ancillary programs, and one issue I see constantly is patients having trouble getting their prescriptions filled.
-
-You write the script, the carrier denies it at the counter, and three weeks later the patient is back in your office no better. Half the time, nobody even told you they never got the medication.
-
-MDRx is a mail-order pharmacy program built specifically for work comp. You e-prescribe exactly as you do now, and the medication ships directly to the patient, typically the next day, at no cost to them.
-
-There are no prior authorizations or denials while the claim remains open or in litigation. MDRx has been doing this for more than 10 years and works with over 400 physicians.
-
-You can read [the Pennsylvania Supreme Court decision from June](https://mdconcierge.net/go.html?p=${t}&to=decision) that opened this up for physicians.
-
-If you're running into this with your work comp patients, [let me know](https://mdconcierge.net/go.html?p=${t}&to=talk) and I'll send you some information on how the program works.` + referral + optout + sig;
-  }
-
-  if (touch === 2) {
-    return `${to}
-
-A work comp patient calls your office because the pharmacy wants an authorization before it will fill the prescription. Now someone on your staff is on the phone with an adjuster instead of running your day.
-
-A mail order pharmacy built specifically for work comp avoids a lot of that. If the prescription comes in, it gets dispensed and shipped to the patient, rather than going back through the usual authorization process while the claim is open or in litigation.
-
-There is very little for the office to do. Nothing is stocked or dispensed there. You e-prescribe the way you do now and send it to our in-network pharmacy instead of the retail counter.
-
-The pharmacy dispenses and ships to the patient. MDRx handles the billing and collections from there.
-
-If you want to see what the program actually asks of the physician and the office, [the MDRx brief lays it out here](https://mdconcierge.net/brief.html?p=${t}).
-
-Or [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). Call, text, email or video, whatever is easiest.` + referral + optout + sig;
-  }
-
-  if (touch === 3) {
-    return `${to}
-
-If you were ever told that a physician could not have an economic interest in medications prescribed to work comp patients, there was an important development in Pennsylvania in June.
-
-The Pennsylvania Supreme Court decided the 700 Pharmacy case 5 to 2. The Court held that the self-referral prohibition applies to the eight services specifically identified in the statute. Prescription drugs are not one of them.
-
-You don't have to take my interpretation of it.
-
-Daniel Siegel argued the case and won it. [His write-up is short and worth reading](https://mdconcierge.net/go.html?p=${t}&to=siegel).
-
-Alice Gosfield also looked specifically at what the decision means for physicians. Her conclusion was: "For physicians who were wary of even trying this model, it is now worth reconsidering." [Her analysis is here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
-
-If you would rather read the underlying decision yourself, [it is here](https://mdconcierge.net/go.html?p=${t}&to=decision).
-
-That decision is a big part of why I am reaching out to Pennsylvania physicians now.` + referral + optout + sig;
-  }
-
-  if (touch === 4) {
-    return `${to}
-
-The prescriptions you write for a work comp patient get filled somewhere, billed to the carrier on the state fee schedule, and collected by someone who had no part in the treatment.
-
-MDRx allows the prescribing physician or practice to participate in that pharmacy revenue without owning, operating or staffing a pharmacy.
-
-By working through MDRx and our pharmacy partners, the medication dispensing and billing will be handled for you, you will receive 65 percent of what is collected, less the cost of the medication, dispensing and shipping. Alice Gosfield calls this a factoring model and says that for physicians who were wary of even trying it, it is now worth reconsidering, [you can read her take here](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
-
-That is really the model.
-
-[The MDRx brief shows how it works from prescription through collection](https://mdconcierge.net/brief.html?p=${t}).
-
-If you read it and want to understand what participation would look like for you or the practice, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk). I'm happy to walk through it.
-
-If you read it and decide it isn't for you, that is fine too.` + referral + optout + sig;
-  }
-
-  // Touch 5 asks for nothing. It names the one real limit and leaves the door open.
-  return `${to}
-
-Last note from me so I am not crowding your inbox.
-
-MDRx is workers' compensation only. Not Medicare, Medicaid or any federal program.
-
-If work comp is not a meaningful part of your practice, this probably is not worth your time.
-
-If it is, I've tried to give you enough information to understand the program without having to sit through a sales call first.
-
-[The MDRx brief explains the program end to end](https://mdconcierge.net/brief.html?p=${t}).
-
-[Daniel Siegel explains the June Supreme Court decision](https://mdconcierge.net/go.html?p=${t}&to=siegel), and [Alice Gosfield explains what it means for physicians](https://mdconcierge.net/go.html?p=${t}&to=gosfield).
-
-If the economics are not of interest, there is still a patient side to it. The program is designed to get work comp patients their medication without the usual pharmacy and authorization problems, shipped directly to their home at no cost while the claim is open or in litigation.
-
-If you get through the information and think it is worth looking at, [tell me the best way to reach you](https://mdconcierge.net/go.html?p=${t}&to=talk) and I'll pick it up from there.
-
-Otherwise, I'll leave it here.` + referral + optout + sig;
+  const body = COLD_BODIES[touch] || COLD_BODIES[4];
+  // The opt-out sits just above "Best,". send-outreach cuts everything from the sign-off down when
+  // it builds the HTML half and only rescues a line carrying an unsubscribe link, so a reply-stop
+  // line under the signature vanished from the HTML and the wire held the email for having no
+  // opt-out. Above the sign-off it survives, and the sender moves it under the signature itself.
+  return `${to}\n\n${COLD_OPENER}\n\n${lead}${body}\n\n${COLD_OPTOUT}` + sig;
 }
 
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
 // as a press release, which is what it was.
 const SUBJECTS = {
-  1: "work comp scripts that never get filled",
-  2: "prior auths on work comp scripts",
-  3: "what changed in june",
-  4: "the pharmacy side of a work comp claim",
-  5: "leaving it here",
+  1: "work comp scripts that don't get filled",
+  2: "Re: work comp scripts that don't get filled",
+  3: "Re: work comp scripts that don't get filled",
+  4: "Re: work comp scripts that don't get filled",
 };
 
 async function run() {
@@ -327,8 +238,8 @@ async function run() {
   // Publish the touch templates so the CRM compose box can offer them as a dropdown.
   // The cadence stays the single source of truth; this is a one-way mirror with the merge
   // tokens left in, so the CRM can substitute the doctor it is actually looking at.
-  const TOUCH_LABELS = { 1: 'Touch 1 · the patient never filled it', 2: 'Touch 2 · prior auths and the front desk', 3: 'Touch 3 · what changed in june', 4: 'Touch 4 · the economics', 5: 'Touch 5 · leaving it here' };
-  for (const n of [1, 2, 3, 4, 5]) {
+  const TOUCH_LABELS = { 1: 'Touch 1 · Eric\'s email', 2: 'Touch 2 · the June ruling', 3: 'Touch 3 · patients and retail pharmacies', 4: 'Touch 4 · PBMs and the right person' };
+  for (const n of [1, 2, 3, 4]) {
     const stub = { last_name: '{{last}}', funnel_token: '{{token}}' };
     await sPost('mdrx_templates',
       { touch_no: n, label: TOUCH_LABELS[n], subject: SUBJECTS[n] || '', body_text: touchBody(n, stub), updated_at: new Date().toISOString() },
@@ -404,6 +315,9 @@ async function run() {
     if (queued.has(p.id)) continue;
     if (suppressed.has((p.email || '').toLowerCase())) continue;
     if (domainBlocked(p.email)) continue;
+    // Eric, 15 Sep 2026: restart slowly on verified addresses only. Guessed initials and accept-all
+    // domains produced an 11.7 percent bounce rate, which is what gets a sender foldered.
+    if (!/spot_verified|seamless_valid|pattern_confirmed|high_sampled|hunter_(8[5-9]|9\d|100)/i.test(String(p.email_confidence || ''))) continue;
     const prac = (p.practice_name || '').toLowerCase();
     // Each physician is his own deal, not a seat on a practice contract, so pacing at one per
     // office per run throttled the biggest and best-fit practices to a trickle: Premier's 54
@@ -415,15 +329,11 @@ async function run() {
     // never the first again, no matter what the record claims about him.
     const alreadySent = sentTouches.get(p.id) || 0;
     const touch = Math.max(Number(p.touch_count) || 0, alreadySent) + 1;
-    // Eric, 15 Sep 2026: touch 2 is paused until he approves new wording. The live version says
-    // "Nothing is stocked or dispensed there", which reads as denying office dispensing, and it
-    // went out 53 times before anyone caught it. Leads due for touch 2 simply wait.
-    if (touch === 2) continue;
     if (alreadySent > (Number(p.touch_count) || 0)) {
       console.log(`  touch_count repaired from outbox: ${p.email} says ${p.touch_count || 0}, has been sent ${alreadySent}, queueing touch ${touch}`);
       await sPatch(`mdrx_providers?id=eq.${p.id}`, { touch_count: alreadySent });
     }
-    if (touch > 5) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
+    if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
     // A/B: a recycled lead's first touch leads with a fresh, approved news opener instead of repeating Touch 1.
     // A/B: a recycled lead's first touch LEADS with a fresh, approved news opener. The rest of
     // the designed email is unchanged, so it still carries the sources, buttons, and signature.
@@ -443,12 +353,12 @@ async function run() {
     // Eric, 2026-09-02. One line, his words, under the signature, the same on all five. It used to
     // be two wordings and neither matched what the gates were looking for, which is what stopped
     // the cold mail for six days.
-    const footer = `\n\nI don't want to bother you if not interested, [click here](${STOP(p.funnel_token || '')}) if you would no longer like to hear from me.`;
+    const footer = ''; // the reply-stop opt-out is inside touchBody, above the sign-off
     const bodyText = touchBody(touch, p, hook) + footer;
     await queueEmail({
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
-      subject: SUBJECTS[touch] || SUBJECTS[5], body_text: bodyText,
-      objective: ['education','operations','legal','economics','breakup'][touch-1] || 'breakup',
+      subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText,
+      objective: ['intro','ruling','access','economics'][touch-1] || 'economics',
       template_key: `cold_${touch}`, channel: 'email',
       // No HTML part. The designed card is what was being filtered.
       body_html: null,
@@ -501,7 +411,7 @@ async function run() {
       const got = already.get(p.id) || new Set();
       const s = stories.find((x) => !got.has(Number(x.id)));
       if (!s) continue;                    // he has had every approved story; wait for a new one rather than repeat
-      const body = `Hi Dr. ${p.last_name || ''},\n\n${String(s.email_intro).trim()}\n\n${DRIP_PITCH}\n\nBest,\n${TEXT_SIG}\n\n${DRIP_OPTOUT}`;
+      const body = `Hi Dr. ${p.last_name || ''},\n\n${String(s.email_intro).trim()}\n\n${DRIP_PITCH}\n\n${DRIP_OPTOUT}\n\nBest,\n${TEXT_SIG}`;
 
       const ok = await queueEmail({
         _last: p.last_name, provider_id: p.id, touch_no: Number(p.touch_count) || 4, to_email: p.email,
