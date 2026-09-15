@@ -12,6 +12,37 @@
 // Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, MDRX_ERIC_PASS (or ERIC_APP_PASSWORD).
 
 import nodemailer from 'nodemailer';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// A PDF of the intake rides along with the email and is filed on the record, so Eric has one
+// file to forward or print. GitHub's ubuntu runners ship Google Chrome, which prints it. If no
+// Chrome is found the email still goes, with the body only, and says so.
+function chromeBin() {
+  for (const c of [process.env.CHROME_BIN, 'google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium']) {
+    if (!c) continue;
+    try { execFileSync(c, ['--version'], { stdio: 'ignore' }); return c; } catch { /* try the next one */ }
+  }
+  return null;
+}
+function makePdf(innerHtml) {
+  const bin = chromeBin();
+  if (!bin) { console.error('  no Chrome found, sending without the PDF'); return null; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdrx-intake-'));
+  const htmlPath = path.join(dir, 'intake.html'), pdfPath = path.join(dir, 'intake.pdf');
+  fs.writeFileSync(htmlPath, '<!doctype html><html><head><meta charset="utf-8"><style>@page{size:Letter;margin:0.6in}body{margin:0}</style></head><body>'
+    + innerHtml + '</body></html>');
+  try {
+    execFileSync(bin, ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-pdf-header-footer',
+      '--print-to-pdf=' + pdfPath, 'file://' + htmlPath], { stdio: 'ignore', timeout: 60000 });
+    return fs.readFileSync(pdfPath);
+  } catch (e) {
+    console.error('  PDF failed: ' + e.message);
+    return null;
+  }
+}
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY }))
@@ -41,7 +72,7 @@ async function findProvider(p) {
 
 // The completed intake, filed on the physician's record as a document he can open later. Stored
 // as the same HTML that was emailed, so what is on file is exactly what the pharmacy received.
-async function fileOnProfile(prov, html, name) {
+async function fileOnProfile(prov, html, name, pdf) {
   const path = `p${prov.id}/${Date.now()}_PDRx-intake.html`;
   const up = await fetch(`${SUPABASE_URL}/storage/v1/object/documents/${path}`, {
     method: 'POST',
@@ -55,6 +86,24 @@ async function fileOnProfile(prov, html, name) {
     uploaded_by: 'intake form',
   });
   if (!r.ok) { console.error('  document row failed: ' + r.status); return false; }
+  // The PDF copy sits beside the HTML one, same name, so either can be opened or forwarded.
+  if (pdf) {
+    const pdfPath = `p${prov.id}/${Date.now()}_PDRx-intake.pdf`;
+    const upPdf = await fetch(`${SUPABASE_URL}/storage/v1/object/documents/${pdfPath}`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/pdf' },
+      body: pdf,
+    });
+    if (!upPdf.ok) console.error('  PDF storage upload failed: ' + upPdf.status);
+    else {
+      const rp = await sPost('mdrx_documents', {
+        provider_id: prov.id, practice_id: prov.practice_id || null,
+        name: `PDRx intake, ${name}.pdf`, path: pdfPath, size: pdf.length, content_type: 'application/pdf',
+        uploaded_by: 'intake form',
+      });
+      if (!rp.ok) console.error('  PDF document row failed: ' + rp.status);
+    }
+  }
   return true;
 }
 
@@ -119,12 +168,13 @@ async function main() {
     const p = r.payload || {};
     const name = (p.practice && p.practice.legal_name) || r.org_name || 'a practice';
     try {
+      const pdf = makePdf(card(p));
       // Submitting the intake is the close. Move the record, file the form on it, and note it.
       const prov = await findProvider(p);
       let filed = '';
       if (prov) {
         const who = `${prov.first_name || ''} ${prov.last_name || ''}`.trim();
-        const filedOk = await fileOnProfile(prov, card(p), name);
+        const filedOk = await fileOnProfile(prov, card(p), name, pdf);
         await sPatch(`mdrx_providers?id=eq.${prov.id}`, {
           stage: 'signed', status: 'active', on_hold: true,
           next_action: 'Intake received. Send it to the pharmacy.', next_action_date: null,
@@ -146,7 +196,10 @@ async function main() {
       await t.sendMail({
         from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER,
         subject: `PDRx intake, ${name}`,
-        html: filed + card(p),
+        html: filed
+          + (pdf ? '' : '<p style="font-size:13px;color:#b0453a;margin:0 0 14px;">The PDF could not be made on this run, so the details are in this email only.</p>')
+          + card(p),
+        attachments: pdf ? [{ filename: `PDRx intake, ${name}.pdf`, content: pdf, contentType: 'application/pdf' }] : [],
         headers: { 'X-MDC-Bot': 'engine', 'X-MDC-Auto': 'pdrx-intake' },
       });
       // Stamped only after the send succeeds, so a mail failure means it goes out next run
