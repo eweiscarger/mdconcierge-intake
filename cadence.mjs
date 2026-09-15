@@ -415,6 +415,10 @@ async function run() {
     // never the first again, no matter what the record claims about him.
     const alreadySent = sentTouches.get(p.id) || 0;
     const touch = Math.max(Number(p.touch_count) || 0, alreadySent) + 1;
+    // Eric, 15 Sep 2026: touch 2 is paused until he approves new wording. The live version says
+    // "Nothing is stocked or dispensed there", which reads as denying office dispensing, and it
+    // went out 53 times before anyone caught it. Leads due for touch 2 simply wait.
+    if (touch === 2) continue;
     if (alreadySent > (Number(p.touch_count) || 0)) {
       console.log(`  touch_count repaired from outbox: ${p.email} says ${p.touch_count || 0}, has been sent ${alreadySent}, queueing touch ${touch}`);
       await sPatch(`mdrx_providers?id=eq.${p.id}`, { touch_count: alreadySent });
