@@ -529,7 +529,8 @@ async function notifyRoutedProviders() {
       }
       const recipients = (contacts || []).filter(c => c.email && /@/.test(c.email));
       if (!recipients.length) {
-        console.log(`  case ${cs.case_id}: provider "${prov.doctor_name}" has no referral-contact email — marking notified, flag for manual follow-up.`);
+        // Actions logs on this repo are public: case numbers and row ids only, never names, addresses or subjects.
+        console.log(`  case ${cs.case_id}: provider ${provId} has no referral-contact email — marking notified, flag for manual follow-up.`);
         await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, notes: (cs.notes || '') + ' | PROVIDER NOTIFY: no referral-contact email on file — contact provider manually' });
         continue;
       }
@@ -550,7 +551,7 @@ async function notifyRoutedProviders() {
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
       await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
       for (const rc of recipients) await sendPortalInvite('provider', provId, rc.email, rc.name, prov.practice_id); // first-time only; dedupes; practice-scoped
-      console.log(`  notified ${prov.doctor_name} -> ${to} (case ${cs.case_id})`);
+      console.log(`  notified provider ${provId}, ${recipients.length} recipient(s) (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
   }
 }
@@ -809,7 +810,7 @@ async function relayTreatingProvider() {
       }
       await sbPatch(`cases?id=eq.${cs.id}`, { treating_relayed: true });
       await logAudit(cs.id, 'treating_provider_relayed', provName);
-      console.log(`  relayed treating provider (${provName}) to attorney for ${cs.case_id}`);
+      console.log(`  relayed treating provider to attorney for ${cs.case_id}`);
     } catch (e) { console.error(`  treating relay ${cs.id} failed: ${e.message}`); }
   }
 }
@@ -1099,7 +1100,7 @@ async function sendSignupInvites() {
       await sbPatch(`signup_invites?id=eq.${inv.id}`, { status: 'sent', sent_at: new Date().toISOString() });
       try { await sbPost('audit_log', { case_id: null, action: 'signup_invite_sent', detail: `${inv.type}: ${inv.email}`, source: 'automation' }); } catch (e) {}
       sent++;
-      console.log(`  signup invite sent to ${inv.type} ${inv.email}`);
+      console.log(`  signup invite ${inv.id} sent (${inv.type})`);
     } catch (e) { console.error(`  signup invite ${inv.id} failed: ${e.message} — left pending for retry.`); }
   }
   if (sent) console.log(`Sign-up invites sent: ${sent}.`);
@@ -1243,7 +1244,7 @@ async function sendPortalLinks() {
         const link = 'https://mdconcierge.net/portal.html?key=' + key;
         const text = `Hello${a.name ? (' ' + a.name) : ''},\n\nHere's your secure sign-in link for the MDconcierge portal — just click to see your cases (no password needed):\n\n${link}\n\nThis link is just for you. If you didn't request it, you can safely ignore this email.`;
         await sendMail(a.email, 'Your MDconcierge sign-in link', text, emailHtml(text, [{ label: '🔓 Open my portal', href: link, color: '#08214C', text: '#ffffff' }]));
-        console.log(`  portal sign-in link sent to ${a.email}`);
+        console.log(`  portal sign-in link sent (account ${a.id})`);
       }
       await sbPatch(`portal_link_requests?id=eq.${r.id}`, { status: 'sent', sent_at: new Date().toISOString() });
     } catch (e) { console.error(`  portal link ${r.id} failed: ${e.message}`); }
@@ -1267,7 +1268,7 @@ async function sendProfileChangeNotices() {
       }
       await sbPatch(`profile_changes?id=eq.${ch.id}`, { status: 'sent', sent_at: new Date().toISOString() });
       sent++;
-      console.log(`  profile-change notice sent (${ch.role}: ${ch.editor_email})`);
+      console.log(`  profile-change notice ${ch.id} sent (${ch.role})`);
     } catch (e) { console.error(`  profile notice ${ch.id} failed: ${e.message} — left pending for retry.`); }
   }
   if (sent) console.log(`Profile-change notices sent: ${sent}.`);
@@ -1307,12 +1308,12 @@ async function ensurePortalAccount(role, recordId, email, name, practiceId) {
 async function sendPortalInvite(role, recordId, email, name, practiceId) {
   const r = await ensurePortalAccount(role, recordId, email, name, practiceId);
   if (!r) return;                       // existing account → nothing to do
-  if (r.held) { console.log(`  portal invite HELD (free domain) for ${role} ${r.email} — review in dashboard.`); return; }
+  if (r.held) { console.log(`  portal invite HELD (free domain) for a ${role} — review in dashboard.`); return; }
   const what = role === 'provider' ? 'your MDconcierge referrals' : "the cases we're coordinating for your clients";
   const text = `Hello${name ? (' ' + name) : ''},\n\nYou can now manage ${what} from one secure portal — no more searching your inbox for the right link. Set a password below and you'll be able to sign in anytime to see your cases and act on them.\n\nThis setup link is unique to you and expires in ${PORTAL_SETUP_TTL_DAYS} days. If you weren't expecting this, you can safely ignore it.`;
   try {
     await sendMail(r.email, 'Set up your MDconcierge portal login', text, emailHtml(text, [{ label: '🔐 Set up my login', href: r.link, color: '#08214C', text: '#ffffff' }]));
-    console.log(`  portal invite sent to ${role} ${r.email}`);
+    console.log(`  portal invite sent to a ${role}`);
   } catch (e) { console.error('  portal invite send failed: ' + e.message); }
 }
 
@@ -1404,8 +1405,8 @@ async function sendAttorneyDigests() {
         emailHtml(text, [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#08214C', text: '#ffffff' }], portalLinkHtml()));
       await sbPost('audit_log', { case_id: null, action: 'attorney_digest', detail: tag, source: 'automation' });
       sent++;
-      console.log(`  weekly digest → ${email} (${list.length} case(s)).`);
-    } catch (e) { console.error(`  digest to ${email} failed: ${e.message}`); }
+      console.log(`  weekly digest sent (${list.length} case(s)).`);
+    } catch (e) { console.error(`  a weekly digest failed: ${e.message}`); }
   }
   if (sent) console.log(`Attorney digests sent: ${sent}.`);
 }
@@ -1455,7 +1456,7 @@ async function scanEricInbox() {
         await insertLead(payload);
         await recordMessage(mid, payload.case_id);
         caught++;
-        console.log(`[eric@] caught a referral sent to eric@ from ${fromAddr} -> ${payload.case_id}`);
+        console.log(`[eric@] caught a referral sent to eric@ -> ${payload.case_id}`);
         { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
           await pushNotify('New referral (sent to eric@)', `${pn} (${payload.case_id})`); }
         if (fromAddr) {
@@ -1525,7 +1526,7 @@ async function main() {
         if (/^\s*contacts?\b/i.test(subject) && /@mdconcierge\.net\s*$/i.test(fromAddr) && SVC) {
           try {
             const res = await scrapeSignature(fromAddr, subject, body);
-            console.log(res.created ? `Scraped contact: ${res.name || ''}${res.company ? (' — ' + res.company) : ''}` : `Contact email had no extractable signature — "${subject}"`);
+            console.log(res.created ? 'Scraped a contact from a forwarded signature.' : 'Contact email had no extractable signature.');
           } catch (e) { console.error('  contact scrape failed: ' + e.message); }
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
@@ -1541,10 +1542,10 @@ async function main() {
               if (cs) {
                 const dlM = body.match(/deadline[^:]*:\s*([^\n|]+)/i);
                 await sbPost('events', { case_id: cs.id, event_type: type, actor: 'attorney', note: 'Reported via email by ' + fromAddr, deadline: dlM ? dlM[1].trim() : null, status: 'open', notified: false });
-                console.log(`Logged ${type} event for ${refM[1]} (reported by ${fromAddr})`);
+                console.log(`Logged ${type} event for ${refM[1]}`);
               } else { console.log(`Report email for unknown ref ${refM[1]} — left for manual review.`); }
             } catch (e) { console.error('  report-event log failed: ' + e.message); }
-          } else { console.log(`Report email with no case ref — "${subject}"`); }
+          } else { console.log(`Report email uid ${uid} has no case ref.`); }
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
         }
@@ -1610,7 +1611,7 @@ async function main() {
         }
         const _fp = msgFingerprint(fromAddr, subject, body);
         if (await seenFingerprint(_fp)) {   // already handled this exact email — don't create a duplicate
-          console.log(`Duplicate of an already-processed email — skipping "${subject}"`);
+          console.log(`Duplicate of an already-processed email — skipping uid ${uid}`);
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           skipped++;
           continue;
@@ -1621,7 +1622,7 @@ async function main() {
           try { firm = await firmContext(fromAddr); } catch (e) {}
           extracted = await extract(subject, fromAddr, body, firm);
           if (extracted && extracted.is_referral === false) {
-            console.log(`Skipping non-referral from ${fromAddr}: "${subject}"`);
+            console.log(`Skipping non-referral uid ${uid}`);
             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
             skipped++;
             continue;
@@ -1629,20 +1630,21 @@ async function main() {
           payload = buildLead(extracted, fromAddr, subject);
           payload.intake_fp = _fp;   // stamp the fingerprint so this exact email can't create a second case
         } catch (e) {
-          console.error(`Parse failed for "${subject}" from ${fromAddr}: ${e.message} — creating review lead.`);
+          // e.message is not logged: a model error can quote the email it choked on.
+          console.error(`Parse failed for uid ${uid} — creating review lead.`);
           payload = fallbackLead(fromAddr, subject, body);
           payload.intake_fp = _fp;
           extracted = null;
         }
         const _mid = msg.envelope?.messageId || '';
         if (_mid && await seenMessage(_mid)) {
-          console.log(`Already handled (duplicate of a message seen via another inbox) — skipping "${subject}"`);
+          console.log(`Already handled (duplicate of a message seen via another inbox) — skipping uid ${uid}`);
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
         }
         await insertLead(payload);
         if (_mid) await recordMessage(_mid, payload.case_id);
-        console.log(`Created ${payload.case_id} [${payload.status}] from ${fromAddr} — "${subject}"`);
+        console.log(`Created ${payload.case_id} [${payload.status}]`);
         created++;
         { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
           await pushNotify('New referral', `${pn} — ${(payload.case_type || 'new case').toUpperCase()} (${payload.case_id})`); }
@@ -1656,13 +1658,13 @@ async function main() {
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
             const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
             await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
-            console.log(`  ↳ acknowledged ${fromAddr}`);
+            console.log(`  ↳ acknowledged the referrer (${payload.case_id})`);
             await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact); // first-time only; free domains held
           } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
         }
         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
       } catch (e) {
-        console.error(`Error on uid ${uid} (${fromAddr}): ${e.message} — left unread for retry.`);
+        console.error(`Error on uid ${uid}: ${e.message} — left unread for retry.`);
       }
     }
     } finally {
