@@ -1477,6 +1477,52 @@ async function scanEricInbox() {
   console.log(`[eric@] done; ${caught} stray referral(s) caught.`);
 }
 
+// ── InjuredGuide web leads: tell Eric the moment one lands ──
+// A lead from injuredguide.com used to sit in the cases table with nobody told, while the site
+// promised a callback within a business day. Until attorney matching exists every one goes to
+// Eric. web_lead_notified keeps each lead to a single alert, and the public insert guard forces it
+// false so a submitted row cannot skip it. The confirmation to the person stays off until Eric
+// approves its exact wording: set WEB_LEAD_CONFIRMATION to { subject, text } then, where {first}
+// is replaced with their first name.
+const WEB_LEAD_CONFIRMATION = null;
+async function notifyWebLeads() {
+  if (!SVC) return;
+  let leads = [];
+  try { leads = await sbGet(`cases?select=id,case_id,patient_first,patient_last,patient_phone,patient_zip,injury_type,case_type,notes&lead_source=eq.injuredguide.com&web_lead_notified=is.false&order=id.asc&limit=20`); }
+  catch (e) { console.error('web-leads: query failed: ' + e.message); return; }
+  for (const cs of leads) {
+    try {
+      const notes = String(cs.notes || '');
+      const field = (label) => { const m = notes.match(new RegExp(label + ':\\s*([^|]+)')); return m ? m[1].trim() : ''; };
+      const email = field('Email');
+      const name = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || '(no name given)';
+      const text = [
+        `A new lead came in through InjuredGuide (${cs.case_id}).`,
+        '',
+        `Name: ${name}`,
+        `Phone: ${fmtPhone(cs.patient_phone) || cs.patient_phone || '(none)'}`,
+        `Email: ${email || '(none)'}`,
+        `Case type: ${cs.case_type || '(not given)'}`,
+        `Injury: ${cs.injury_type || '(not given)'}`,
+        `Location: ${[field('Location'), cs.patient_zip].filter(Boolean).join(' ') || '(not given)'}`,
+        `Score: ${field('Score') || '(none)'}`,
+        field('Description') ? `What they wrote: ${field('Description')}` : '',
+        '',
+        'No attorney or provider has been told. This one is yours to call.',
+      ].filter((l, i, a) => l !== '' || (a[i - 1] !== '' && i > 0)).join('\n');
+      await sendMail(ERIC_USER, `New InjuredGuide lead: ${cs.case_type || 'case'} (${cs.case_id})`, text, emailHtml(text, [], caseFooter(cs.case_id)));
+      await pushNotify('New InjuredGuide lead', `${cs.case_type || 'New case'} (${cs.case_id})`);
+      if (WEB_LEAD_CONFIRMATION && /@/.test(email)) {
+        const body = WEB_LEAD_CONFIRMATION.text.split('{first}').join(cs.patient_first || 'there');
+        await sendMail(email, WEB_LEAD_CONFIRMATION.subject, body, emailHtml(body, []));
+      }
+      await sbPatch(`cases?id=eq.${cs.id}`, { web_lead_notified: true });
+      await logAudit(cs.id, 'web_lead_notified', WEB_LEAD_CONFIRMATION ? 'eric + confirmation' : 'eric');
+      console.log(`  web lead ${cs.case_id}: Eric notified`);
+    } catch (e) { console.error(`  web lead ${cs.id} failed: ${e.message}`); }
+  }
+}
+
 async function main() {
   const mkClient = () => new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
   // Zoho occasionally throttles / is slow to greet; a couple of quick retries turn a
@@ -1673,6 +1719,7 @@ async function main() {
   }
   await client.logout();
   await scanEricInbox();   // also catch referrals sent to eric@ by mistake
+  await notifyWebLeads();  // every InjuredGuide web lead goes to Eric the moment it lands
   await confirmNetworkRequests();          // ack the referrer "received, placing it"
   await announceInNetworkReferrals();
   await notifyRoutedProviders();
