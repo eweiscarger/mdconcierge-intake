@@ -172,8 +172,10 @@ async function main() {
   }
 
   // A hard bounce usually means the doctor left that practice. Check the NPI registry for
-  // where they are now, constrained to PA. Anything found is QUEUED for Eric to confirm in
-  // enrichment_suggestions; nothing is written onto the lead and nothing is unsuppressed.
+  // where they are now, constrained to PA. Eric, 15 Sep 2026: the confirmation queue is gone,
+  // so what the registry says is written to the lead's timeline as a note and logged in
+  // enrichment_suggestions as 'logged'. The address fields are not overwritten and nothing is
+  // unsuppressed: a new location is a lead for a new email, not a new email.
   let relocFound = 0;
   const relocLines = [];
   for (const pid of [...new Set(relocate)]) {
@@ -183,8 +185,8 @@ async function main() {
       if (!p || !p.last_name) continue;
       const st = deriveState(p) || 'PA';
       if (st !== 'PA') continue;                       // Eric asked: only chase them if they are in PA
-      const open = await sGet(`enrichment_suggestions?select=id&provider_id=eq.${p.id}&status=eq.pending`);
-      if (open && open.length) continue;               // already waiting on him
+      const seen = await sGet(`enrichment_suggestions?select=id&provider_id=eq.${p.id}&source=eq.bounce_relocation`);
+      if (seen && seen.length) continue;               // already on his timeline
       const cands = await npiLookup({ last_name: p.last_name, first_name: p.first_name, state: st });
       if (!cands.length) continue;
       const ranked = cands.map((c) => ({ c, conf: score(c, p, st) }))
@@ -198,11 +200,12 @@ async function main() {
         + `The NPI registry currently lists NPI ${c.npi}, ${c.specialty || 'specialty n/a'}, ${where}`
         + `${c.office_phone ? ' · ' + c.office_phone : ''}${c.address ? ' · ' + c.address : ''}. `
         + (moved ? `That is ${moved.join(', ')} versus what we have, so they likely moved. ` : 'Same location as our record, so the address may just be dead. ')
-        + 'Confirm before we try a new email. No address is guessed here.';
+        + 'No email address is guessed here.';
       await sPost('enrichment_suggestions', {
         provider_id: p.id, found: { ...pick(c, ['npi', 'credentials', 'specialty', 'address', 'city', 'state', 'zip', 'office_phone']), alternates: ranked.slice(1, 4).map((r) => r.c) },
-        summary, confidence: best.conf, source: 'bounce_relocation', status: 'pending',
+        summary, confidence: best.conf, source: 'bounce_relocation', status: 'logged', resolved_at: new Date().toISOString(),
       });
+      await sPost('mdrx_activity', { provider_id: p.id, type: 'note', subject: 'Bounced: NPI registry location', notes: summary, created_by: 'engine' });
       relocFound++;
       relocLines.push(`- Dr. ${p.last_name}: now ${where}${c.office_phone ? ', ' + c.office_phone : ''}${moved ? ' (moved)' : ''}`);
     } catch (e) { console.error(`relocation check failed for provider ${pid}: ${e.message}`); }
@@ -210,7 +213,7 @@ async function main() {
   if (relocFound) {
     await alertEric(`[MDconcierge] ${relocFound} bounced doctor(s) located in PA`,
       `These addresses hard-bounced. The NPI registry has current information for them:\n\n${relocLines.join('\n')}\n\n`
-      + `They are queued in the Cockpit for you to confirm. Nothing was changed on the lead and no email address was guessed.`);
+      + `Each is noted on the lead's timeline. The address on file was not changed and no email address was guessed.`);
   }
   console.log(`bounce-scan: relocation checks queued ${relocFound}.`);
 
