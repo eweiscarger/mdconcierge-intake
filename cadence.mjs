@@ -207,6 +207,26 @@ const COLD_BODIES = {
 };
 const COLD_OPTOUT = "If you are not interested or you do not treat work comp patients, simply let me know or reply stop and I will not contact you anymore.";
 
+
+// Eric, 15 Sep 2026: his mail to a partner landed in junk and the campaign shares his domain, so
+// cold touches must look like a letter he typed. This builds the HTML half here rather than letting
+// send-outreach do it, because the sender appends a signature block carrying a remote logo image
+// whenever the body has no signature of its own. The marker tells it this body already has one.
+// No images, no links, no card. Paragraphs and his typed signature, and that is all.
+const htmlLetter = (text) => {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const paras = String(text).trim().split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const quiet = /(?:are not|aren't) interested|reply stop/i;
+  const body = paras.map((p) => {
+    const style = quiet.test(p)
+      ? 'margin:0 0 12px;font-size:12px;line-height:1.5;color:#8a93a1;'
+      : 'margin:0 0 12px;';
+    return `<p style="${style}">${esc(p).replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+  return '<!--signature-inline--><div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+    + `font-size:15px;line-height:1.55;color:#1a2233;max-width:640px;">${body}</div>`;
+};
+
 function touchBody(touch, p, hook) {
   const staff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
   const to = staff ? `Hi ${p.first_name || ''},`.trim() : `Hi Dr. ${p.last_name || ''},`.trim();
@@ -360,11 +380,12 @@ async function run() {
       subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText,
       objective: ['intro','ruling','access','economics'][touch-1] || 'economics',
       template_key: `cold_${touch}`, channel: 'email',
-      // No HTML part. The designed card is what was being filtered.
-      body_html: null,
+      // The letter above is the HTML half, with his typed signature inside it, so the sender adds
+      // no card and no logo image.
+      body_html: htmlLetter(bodyText),
       status: 'pending', scheduled_date: today(), content_id: contentId,
-      // plain: the sender omits the HTML part entirely for this key.
-      template_key: 'plain',
+      // Not 'plain': that key makes the sender rebuild the HTML itself and append its logo block.
+      template_key: 'cold',
     });
     if (contentId) { const cur = await sGet(`mdrx_content_queue?select=used_count&id=eq.${contentId}`); await sPatch(`mdrx_content_queue?id=eq.${contentId}`, { used_count: ((cur[0] && cur[0].used_count) || 0) + 1 }); }
     if (prac) practicesToday.set(prac, (practicesToday.get(prac) || 0) + 1);
