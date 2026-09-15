@@ -231,7 +231,7 @@ function touchBody(touch, p, hook) {
   const staff = /administrator|manager|coordinator|director|staff|office/i.test(String(p.credentials || ''));
   const to = staff ? `Hi ${p.first_name || ''},`.trim() : `Hi Dr. ${p.last_name || ''},`.trim();
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
-  const sig = '\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\n(570) 817-7569\neric@mdconcierge.net\nmdconcierge.net';
+  const sig = '\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\nReferral management, work comp pharmacy, ancillary coordination\n(570) 817-7569\neric@mdconcierge.net\nmdconcierge.net';
   const body = COLD_BODIES[touch] || COLD_BODIES[4];
   // The opt-out sits just above "Best,". send-outreach cuts everything from the sign-off down when
   // it builds the HTML half and only rescues a line carrying an unsubscribe link, so a reply-stop
