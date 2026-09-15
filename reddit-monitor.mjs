@@ -49,7 +49,7 @@ const stripHtml = (s) => decode(decode(s)).replace(/<[^>]+>/g, ' ').replace(/\s+
 async function fetchFeed(url) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; injuredguide-research/1.0)' } });
-    if (r.status === 429 && attempt === 1) { await sleep(30000); continue; }
+    if (r.status === 429 && attempt === 1) { await sleep(75000); continue; }
     if (!r.ok) throw new Error(`${r.status}`);
     const xml = await r.text();
     return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((m) => {
@@ -79,6 +79,7 @@ If relevant, draft a reply Eric could post from his own account:
 - State-specific facts only when you are confident they are correct for PA or DE workers' comp or auto injury. Do NOT state deadlines, day counts or dollar amounts unless certain; say "there are deadlines, so don't wait" instead. Point to the official agency (Pennsylvania Bureau of Workers' Compensation, or the Delaware Office of Workers' Compensation) when useful.
 - Suggest talking to a licensed attorney in their state when their situation calls for it, without pushing.
 - Never ask them to DM, call, or contact Eric personally.
+- Never tell them to avoid, screen out, or question a doctor or provider because of network, certification, or panel list status. Eric works with providers who may not be on those lists.
 - Mention injuredguide.com only if it truly fits (they ask where to get help, or how to find a lawyer or doctor). Then set include_link true and end with one sentence of disclosure: "Full disclosure, I run injuredguide.com, a free site where someone reviews your situation and calls you back." Otherwise include_link false and no mention of the site.
 - No em dashes or en dashes.
 
@@ -120,7 +121,13 @@ async function scan() {
       if (!stateHit) continue;
       candidates++;
       let v;
-      try { v = await judge(p, f.hint); } catch (e) { console.error(`judge failed for ${p.id}: ${e.message}`); continue; }
+      try { v = await judge(p, f.hint); }
+      catch (e) {
+        // An empty credit balance fails every post the same way. Stop and alert rather than log it
+        // quietly on each one and finish green, which is how the other AI jobs went dark for days.
+        if (/credit balance/i.test(e.message)) throw new Error('Anthropic credit balance is too low: ' + e.message.slice(0, 200));
+        console.error(`judge failed for ${p.id}: ${e.message}`); seen.delete(p.id); continue;
+      }
       const relevant = !!v.relevant && ['PA', 'DE'].includes(v.state) && String(v.draft || '').trim().length > 0;
       await sPost('reddit_leads', {
         post_id: p.id, subreddit: p.subreddit || (f.url.split('/r/')[1] || '').split('/')[0], title: p.title.slice(0, 500), url: p.url,
@@ -130,7 +137,7 @@ async function scan() {
       });
       if (relevant) drafted++;
     }
-    await sleep(6000); // Reddit rate-limits bursts; a steady trickle is never refused
+    await sleep(15000); // Reddit rate-limits bursts: at 6 seconds apart 8 of 17 feeds were refused
   }
   console.log(`reddit-monitor scan: ${read} posts read from ${feeds.length - failedFeeds}/${feeds.length} feeds, ${candidates} candidates judged, ${drafted} answers drafted.`);
   if (failedFeeds === feeds.length) throw new Error('every Reddit feed failed');
