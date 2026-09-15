@@ -460,21 +460,32 @@ async function run() {
   // A tier is just a speed: hot moves in days because he asked for something, warm moves in weeks
   // because he only looked. Neither asks Eric to write anything.
   // ---- News drips --------------------------------------------------------------------------
-  // A physician who has had all four touches and said nothing is not finished, he is just not
-  // interested in the ruling as an opening. A drip gives him a different reason to look: one
-  // approved news opener, then the same single ask. Touch 1 keeps the ruling; this is what comes
-  // after the sequence, not instead of it.
+  // A physician who has had every cold touch and said nothing is not finished. A drip gives him a
+  // different reason to look. Eric, 15 Sep 2026: not every news story deserves one. He approves a
+  // story, Claude writes a short comment on it, and he approves that email. Only stories with an
+  // approved email (email_status = 'approved') ever go out, a physician gets a given story at most
+  // once, and under the comment sits DRIP_PITCH, Eric's own pitch, approved word for word. Do not
+  // edit DRIP_PITCH or DRIP_OPTOUT without his approval of the exact wording.
   //
-  // Openers come from mdrx_content_queue, approved by Eric, and rotate by least-used so a theme
-  // is not repeated to the same list. Engagement is already tracked per opener, so over time the
-  // themes that earn replies rise on their own.
+  // touch_no is the lead's own touch_count, not 0. send-outreach reads touch_no 0 as a personal
+  // one to one note: it would hold the email for carrying an opt-out and append a second
+  // signature. Reusing the count the lead already has keeps a drip campaign mail without moving
+  // him along the cold sequence.
+  const DRIP_PITCH = "If you ever prescribed meds for a work comp patient to a retail pharmacy that didn't get filled and caused a setback for the patient, it is not uncommon. 30% of work comp patients have difficulty getting their medication from this traditional method.\n\nA work comp mail order pharmacy can solve that. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR. And many physicians are not aware that in June, the PA Supreme Court ruled the anti-referral law does not apply to prescription drugs, so carriers cannot deny pharmacy payment on that basis (700 Pharmacy, 6/16/26).\n\nFor years, PBMs that have no involvement in patient care have generated the majority of revenue from prescriptions you write. The Work Comp Research Institute (WCRI) estimates prescription spend at $2,262 per work comp claim. You do all of the work, generate those scripts and never see any of that revenue. A mail order pharmacy program like ours gives you a compliant way to improve patient satisfaction and participate in the pharmacy revenue from scripts you already write. For those 2 reasons alone, wouldn't this be worth considering? Reply send and I will email you more about the PA Supreme Court Ruling and our program by MDRx.\n\nIf there is a better email to reach you on or if you would like to discuss in person, I would be happy to stop by the office with coffee.";
+  const DRIP_OPTOUT = "If you are not interested or you do not treat work comp patients, simply let me know or reply stop and I will not contact you anymore.";
   const dripRun = async () => {
     const DRIP_GAP_DAYS = 14;              // never within a fortnight of the last thing he got
-    const openers = await sGet("mdrx_content_queue?select=id,headline,draft_hook,used_count&status=eq.approved&kind=eq.opener&order=used_count.asc,id.asc");
-    if (!openers.length) return 0;
+    const stories = await sGet("mdrx_content_queue?select=id,email_subject,email_intro,used_count&email_status=eq.approved&email_subject=not.is.null&email_intro=not.is.null&order=used_count.asc,id.asc");
+    if (!stories.length) return 0;
+    // Which approved stories each physician already has, queued or sent, so nobody gets one twice.
+    const already = new Map();
+    for (const row of await sGet('mdrx_outbox?select=provider_id,content_id&content_id=not.is.null&status=in.(pending,sent,held)&limit=10000')) {
+      if (!already.has(row.provider_id)) already.set(row.provider_id, new Set());
+      already.get(row.provider_id).add(Number(row.content_id));
+    }
 
     const pool = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,email,funnel_token,touch_count,last_touch_at,funnel_stage&lead_type=eq.funnel&email=not.is.null&suppressed=eq.false&on_hold=eq.false&or=(manual_touch_at.is.null,manual_touch_at.lt.${manualCutoff()})&touch_count=gte.4&funnel_stage=in.(Contacted,Not Now)&order=last_touch_at.asc`);
-    let n = 0, oi = 0;
+    let n = 0;
     for (const p of pool) {
       if (queued.has(p.id)) continue;
       if (suppressed.has((p.email || '').toLowerCase())) continue;
@@ -483,36 +494,29 @@ async function run() {
       if (since < DRIP_GAP_DAYS) continue;
       if (n >= 10) break;                  // a drip is a trickle, not a second campaign
 
-      const o = openers[oi % openers.length]; oi++;
-      await ensureToken(p);
-      const t = p.funnel_token;
-      const dr = `Dr. ${p.last_name || ''}`.trim();
-      const body = `${dr},\n\n${String(o.draft_hook || '').trim()}\n\n`
-        + `You can participate individually or through the practice, whichever suits.\n\n`
-        + `If you would like someone to reach out directly, tell us the best way to reach you here: ${link(t, 'talk')}\n\n`
-        + `Or if you would rather pick a time yourself, see my calendar: ${link(t, 'book')}\n\n`
-        + `Best,\n${TEXT_SIG}\n\nI don't want to bother you if not interested, [click here](${STOP(t)}) if you would no longer like to hear from me.`;
+      const got = already.get(p.id) || new Set();
+      const s = stories.find((x) => !got.has(Number(x.id)));
+      if (!s) continue;                    // he has had every approved story; wait for a new one rather than repeat
+      const body = `Hi Dr. ${p.last_name || ''},\n\n${String(s.email_intro).trim()}\n\n${DRIP_PITCH}\n\nBest,\n${TEXT_SIG}\n\n${DRIP_OPTOUT}`;
 
-      await queueEmail({
-        _last: p.last_name, provider_id: p.id, touch_no: 0, to_email: p.email,
-        subject: o.headline || SUBJECTS[1],
-        // Plain text here too. A recycled lead is a cold lead who has already ignored four
-        // designed emails, so sending a fifth in the same format is the definition of doing the
-        // same thing again.
+      const ok = await queueEmail({
+        _last: p.last_name, provider_id: p.id, touch_no: Number(p.touch_count) || 4, to_email: p.email,
+        subject: s.email_subject,
+        // Plain text, like the cold touches: the body already carries the signature and the opt-out.
         body_text: body, body_html: null, template_key: 'plain',
         status: 'pending', scheduled_date: today(),
-        objective: 'drip', template_key: 'drip', channel: 'email', content_id: o.id,
+        objective: 'drip', channel: 'email', content_id: s.id,
       });
-      await sPatch(`mdrx_content_queue?id=eq.${o.id}`, { used_count: (Number(o.used_count) || 0) + 1 });
+      if (!ok) continue;
+      await sPatch(`mdrx_content_queue?id=eq.${s.id}`, { used_count: (Number(s.used_count) || 0) + 1 });
+      s.used_count = (Number(s.used_count) || 0) + 1;
+      stories.sort((a, b) => (Number(a.used_count) || 0) - (Number(b.used_count) || 0) || a.id - b.id);
       await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_next_date: addDaysISO(DRIP_GAP_DAYS) });
       queued.add(p.id); n++;
     }
     return n;
   };
-  // Eric, 15 Sep 2026: drips are held until he approves their wording once. The body above still
-  // carries the click-here opt-out he replaced with reply-stop on 10 Sep, and nobody approved it.
-  const DRIPS_APPROVED = false;
-  const dripCount = DRIPS_APPROVED ? await dripRun() : 0;
+  const dripCount = await dripRun();
 
   const hotCount = 0;
   const engCount = 0;

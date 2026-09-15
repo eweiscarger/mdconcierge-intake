@@ -1,11 +1,12 @@
 // news-monitor.mjs — the content mind-hive scout.
-// Weekly, it uses Claude's web search to scan the standing sources for fresh, REAL,
-// cited developments that fit the hero/villain content rule (villains = PBMs / TPAs /
-// denial machinery; never negative about dispensing, mail-order, or WC pharmacy). It
-// turns fitting stories into ready-to-use email OPENERS in the locked voice, and also
-// watches for ancillary REVENUE OPPORTUNITIES (peptides for MSK, cash-pay lines, etc.)
-// as intel for Eric. Everything lands in mdrx_content_queue as 'pending' for Eric to
-// approve before it can enter rotation. It SENDS NOTHING to prospects.
+// Weekly, it uses Claude's web search to find fresh, REAL, cited developments. Eric, 15 Sep
+// 2026: most of what it used to bring (FTC and commercial PBM news, other states' fee
+// schedules) meant nothing to a Pennsylvania physician, so openers are now held to a narrow
+// test: Pennsylvania workers' comp, or injured workers getting their medication. Fewer items,
+// each one worth an email. It also watches for ancillary REVENUE OPPORTUNITIES as intel for
+// Eric. Everything lands in mdrx_content_queue as 'pending'. A story only reaches a physician
+// after Eric approves it AND approves the email written for it (email_status = 'approved').
+// It SENDS NOTHING to prospects.
 // Governed by MESSAGING_AND_CONTENT.md.
 import Anthropic from '@anthropic-ai/sdk';
 import nodemailer from 'nodemailer';
@@ -34,15 +35,20 @@ THE CONTENT RULE (hero / villain) governs everything you write:
 
 ACCURACY GUARDRAIL: Our model still bills the payer through MDRx. Do NOT frame it as cutting the payer out of paying. Aim the fire at the middlemen and denial games (PBMs, TPAs, UR friction). Keep every claim true: independent pharmacy, claims-purchasing / factoring (NOT ownership, NOT dispensing), WC only, legal opinions per state, cite the PA Supreme Court's 700 Pharmacy decision and Alice Gosfield where natural. Never fabricate. Every source_url must be a REAL url you actually found via web search. No em dashes or en dashes anywhere. Never use the phrase "gray area".
 
-STANDING THEMES: (1) middlemen getting caught, e.g. FTC PBM actions; (2) denials/delays worsening from TPAs and utilization review; (3) reimbursement squeezing private practice, framed as opportunity; (4) medication-access data (WCRI, drug trends); (5) legal footing (700 Pharmacy, Gosfield).
+THE RELEVANCE TEST FOR OPENERS (Eric, 15 Sep 2026). An opener must pass BOTH:
+1. It is about Pennsylvania workers' compensation, OR about injured workers getting (or failing to get) their medication: fills, denials, delays, access, delivery.
+2. A Pennsylvania orthopedic, pain or PM&R physician who treats work comp patients would read it and think "that affects my patients or my practice."
+Reject for openers: FTC or commercial PBM news that is not about work comp; any other state's rules, fee schedules or audits; general practice economics; private equity; webinars and events; anything older than the window; anything that repeats a story already covered. When in doubt, leave it out. Returning zero openers is a good result when nothing passes.
+
+STANDING THEMES (only as they pass the test above): (1) Pennsylvania work comp medication access, denials and delays for injured workers; (2) Pennsylvania Bureau of Workers' Compensation and PA court developments affecting WC pharmacy; (3) medication-access data for injured workers (WCRI, drug trends) with a clear patient consequence.
 
 STANDING SOURCES to draw from: WorkersCompensation.com, WCRI, Risk & Insurance, MyMatrixx, Enlyte drug trends, daisyBill, FTC newsroom, health-law firm alerts, Medical Economics, MGMA, Becker's Orthopedic/Spine, Physicians Practice, Gosfield's newsletter, Dan Siegel's firm, AHLA, PA Bureau of Workers' Comp, DOL OWCP.
 
 ANCILLARY OPPORTUNITY RADAR: also watch for ancillary revenue opportunities or advancements our target practices (and we) should know about and could get involved in, e.g. peptides for MSK/orthopedic/pain practices, regenerative and other compliant cash-pay ancillary lines, new revenue models adjacent to WC pharmacy. These are intel for Eric (kind="opportunity"), not customer-facing copy.`;
 
-const USER = `Today is ${today}. Use web search to find REAL, cited developments from roughly the LAST 21 DAYS that fit the content rule above, plus any notable ancillary revenue opportunities for MSK / orthopedic / pain / PM&R practices.
+const USER = `Today is ${today}. Use web search to find REAL, cited developments from roughly the LAST 21 DAYS. Openers must pass THE RELEVANCE TEST above; also report any notable ancillary revenue opportunities for MSK / orthopedic / pain / PM&R practices.
 
-Search the standing sources and the open web. Keep only items that are (a) real and sourceable to a working URL, and (b) usable WITHOUT saying anything negative about dispensing, mail-order, or WC pharmacy. Discard everything else.
+Search the standing sources and the open web. Keep only items that are (a) real and sourceable to a working URL, (b) usable WITHOUT saying anything negative about dispensing, mail-order, or WC pharmacy, and (c) for openers, pass the relevance test. Discard everything else, and prefer returning nothing over returning filler.
 
 After searching, output ONLY a JSON array (no prose before or after, no markdown fences). Return ${MAX_ITEMS} items or fewer, favoring the freshest, most concrete, best-sourced. Each element:
 {
@@ -113,7 +119,7 @@ async function main() {
       await t.sendMail({
         from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER,
         subject: `${added} fresh content idea${added === 1 ? '' : 's'} to review`,
-        html: `<p>The news scout found <b>${openers}</b> new marketing opener${openers === 1 ? '' : 's'} and <b>${opps}</b> ancillary opportunit${opps === 1 ? 'y' : 'ies'} that fit the messaging rules.</p><p>Review and approve or reject them in the Cockpit &rarr; <b>Content</b> tab. Nothing enters rotation until you approve it.</p>`,
+        html: `<p>The news scout found <b>${openers}</b> Pennsylvania work comp stor${openers === 1 ? 'y' : 'ies'} and <b>${opps}</b> ancillary opportunit${opps === 1 ? 'y' : 'ies'}.</p><p>Review them in the Cockpit &rarr; <b>Content</b> tab. For a story worth emailing, ask Claude to write its email. Nothing reaches a physician until you approve that email.</p>`,
       });
     } catch (e) { console.error('digest email failed: ' + e.message); }
   }
