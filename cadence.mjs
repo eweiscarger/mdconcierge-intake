@@ -509,7 +509,10 @@ async function run() {
     }
     return n;
   };
-  const dripCount = await dripRun();
+  // Eric, 15 Sep 2026: drips are held until he approves their wording once. The body above still
+  // carries the click-here opt-out he replaced with reply-stop on 10 Sep, and nobody approved it.
+  const DRIPS_APPROVED = false;
+  const dripCount = DRIPS_APPROVED ? await dripRun() : 0;
 
   const hotCount = 0;
   const engCount = 0;
