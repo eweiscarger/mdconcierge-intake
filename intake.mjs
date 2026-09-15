@@ -1481,10 +1481,44 @@ async function scanEricInbox() {
 // A lead from injuredguide.com used to sit in the cases table with nobody told, while the site
 // promised a callback within a business day. Until attorney matching exists every one goes to
 // Eric. web_lead_notified keeps each lead to a single alert, and the public insert guard forces it
-// false so a submitted row cannot skip it. The confirmation to the person stays off until Eric
-// approves its exact wording: set WEB_LEAD_CONFIRMATION to { subject, text } then, where {first}
-// is replaced with their first name.
-const WEB_LEAD_CONFIRMATION = null;
+// false so a submitted row cannot skip it. The person gets a confirmation in the language they
+// used on the site (the consent line in notes records it). Eric approved this wording word for word
+// on 15 Sep 2026, including the 2 business day promise; do not edit it without his approval.
+// It goes out as InjuredGuide, not with Eric's MDconcierge signature.
+const WEB_LEAD_CONFIRMATION = {
+  en: {
+    subject: 'We received your request, {first}',
+    text: `Hi {first},
+
+Thank you for reaching out to InjuredGuide. We received your information.
+
+A member of the InjuredGuide team will review it and contact you by phone or email within 2 business days.
+
+InjuredGuide is not a law firm and does not give legal or medical advice. Sending this request does not make anyone your attorney.
+
+If you have a deadline coming up, or think you might, please contact a licensed attorney in your state right away. Do not wait to hear from us. If you have a medical emergency, call 911.
+
+You can reply to this email to add details or to ask us to stop contacting you.
+
+The InjuredGuide team`,
+  },
+  es: {
+    subject: 'Recibimos su solicitud, {first}',
+    text: `Hola {first}:
+
+Gracias por comunicarse con InjuredGuide. Recibimos su información.
+
+Una persona del equipo de InjuredGuide la revisará y se comunicará con usted por teléfono o correo electrónico dentro de 2 días hábiles.
+
+InjuredGuide no es un bufete de abogados y no da consejos legales ni médicos. Enviar esta solicitud no hace que nadie sea su abogado.
+
+Si tiene una fecha límite cerca, o cree que podría tenerla, comuníquese hoy mismo con un abogado con licencia en su estado. No espere a que lo contactemos. Si tiene una emergencia médica, llame al 911.
+
+Puede responder a este correo para agregar detalles o para pedirnos que no lo contactemos más.
+
+El equipo de InjuredGuide`,
+  },
+};
 async function notifyWebLeads() {
   if (!SVC) return;
   let leads = [];
@@ -1512,9 +1546,20 @@ async function notifyWebLeads() {
       ].filter((l, i, a) => l !== '' || (a[i - 1] !== '' && i > 0)).join('\n');
       await sendMail(ERIC_USER, `New InjuredGuide lead: ${cs.case_type || 'case'} (${cs.case_id})`, text, emailHtml(text, [], caseFooter(cs.case_id)));
       await pushNotify('New InjuredGuide lead', `${cs.case_type || 'New case'} (${cs.case_id})`);
-      if (WEB_LEAD_CONFIRMATION && /@/.test(email)) {
-        const body = WEB_LEAD_CONFIRMATION.text.split('{first}').join(cs.patient_first || 'there');
-        await sendMail(email, WEB_LEAD_CONFIRMATION.subject, body, emailHtml(body, []));
+      if (WEB_LEAD_CONFIRMATION && /^[^\s@|]+@[^\s@|]+\.[^\s@|]+$/.test(email)) {
+        const es = /Consent: agreed [^|]*\(es\)/.test(notes);
+        const tpl = WEB_LEAD_CONFIRMATION[es ? 'es' : 'en'];
+        const name = String(cs.patient_first || '').trim();
+        // No first name: the subject drops ", {first}", English greets "Hi there," and Spanish "Hola:".
+        const fill = (s) => s
+          .replace(/, \{first\}/g, name ? `, ${name}` : '')
+          .replace(/ \{first\}/g, name ? ` ${name}` : (es ? '' : ' there'));
+        const body = fill(tpl.text);
+        await transporter.sendMail({
+          from: `InjuredGuide <${ZOHO_USER}>`, replyTo: `InjuredGuide <${ZOHO_USER}>`,
+          to: email, subject: fill(tpl.subject), text: body,
+          headers: { 'X-MDC-Auto': 'injuredguide-confirmation' },
+        });
       }
       await sbPatch(`cases?id=eq.${cs.id}`, { web_lead_notified: true });
       await logAudit(cs.id, 'web_lead_notified', WEB_LEAD_CONFIRMATION ? 'eric + confirmation' : 'eric');
