@@ -1,4 +1,7 @@
-name: The desk (keeper)
+﻿name: The desk (keeper)
+# Touched 16 Sep 2026 to force GitHub to re-register this schedule: every workflow file changed
+# since 15 Sep 20:27 UTC stopped being scheduled entirely (desk and morning-digest have never
+# fired once). schedule-registration touch.
 
 # Runs first, before anything else touches the book. Every live lead gets a next step and a date,
 # anything gone quiet is flagged, anyone waiting on an answer is flagged, and every commitment Eric
