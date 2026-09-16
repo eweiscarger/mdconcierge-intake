@@ -10,7 +10,6 @@
 on:
   schedule:
     - cron: '50 11 * * *'   # weekday mornings, ~7:50am ET, ahead of the cadence at 8:10
-    - cron: '7 14 * * *'   # TEMPORARY probe, remove after the registration test
   workflow_dispatch:
     inputs:
       dry:
