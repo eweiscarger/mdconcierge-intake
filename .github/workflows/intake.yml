@@ -30,7 +30,13 @@ jobs:
         env:
           ZOHO_USER: ${{ secrets.ZOHO_USER }}
           ZOHO_APP_PASSWORD: ${{ secrets.ZOHO_APP_PASSWORD }}
-          ERIC_APP_PASSWORD: ${{ secrets.ERIC_APP_PASSWORD }}
+          # ERIC_APP_PASSWORD deliberately NOT passed, 16 Sep 2026. It switches on scanEricInbox(),
+          # which reads three days of eric@ and turns anything the classifier calls a referral into
+          # a case, then auto-acknowledges the sender. Eric coordinates plenty of referrals by hand
+          # from that inbox, so it kept filing his own work as new leads and emailing the referring
+          # practice about them. referrals@ is unaffected and still creates cases normally.
+          # To turn the watcher back on, restore this line - the secret is still in the repo.
+          # ERIC_APP_PASSWORD: ${{ secrets.ERIC_APP_PASSWORD }}
           HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
           VAPID_PUBLIC: ${{ secrets.VAPID_PUBLIC }}
           VAPID_PRIVATE: ${{ secrets.VAPID_PRIVATE }}
