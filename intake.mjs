@@ -216,7 +216,72 @@ function fallbackLead(fromAddr, subject, body) {
 }
 
 // ── Gracious auto-acknowledgment (coordinator reply: #1 acknowledge, #2 chase missing info) ──
-const transporter = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD } });
+const _rawTransporter = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD } });
+
+// ── The last line of defence: a per-recipient send cap ───────────────────────────────────────────
+// Every notification path is already one-shot, gated by its own flag (provider_notified,
+// appt_relayed, claim_info_forwarded and the rest), and chasing is spaced 48 hours with a hard cap.
+// This does not replace any of that. It is what catches the case where one of those flags fails to
+// set, or a future change introduces a loop: the difference between a bug that is annoying and a
+// bug that emails a physician every sixty seconds until someone notices.
+//
+// It wraps the TRANSPORT, not sendMail(), because four paths call transporter.sendMail directly -
+// document forwarding (with attachments), the Excel pharmacy route, and the InjuredGuide
+// confirmation to the injured person. A guard on the helpers would leave those open.
+//
+// The count is read from audit_log rather than held in memory: the engine relaunches itself roughly
+// every 54 minutes, so an in-process tally resets constantly and would never see a slow loop.
+const SEND_CAP_PER_HOUR = 6;    // a real case sends one notice + at most 3 reminders over ~6 business days
+const SEND_CAP_PER_DAY = 25;
+const _capAlerted = new Set();  // alert Eric once per address per run, never once per blocked message
+
+async function _recentSendCount(addr, sinceIso) {
+  if (!SVC) return 0;
+  try {
+    const rows = await sbGet(`audit_log?select=id&action=eq.mail_sent&detail=eq.${encodeURIComponent(addr)}&created_at=gte.${sinceIso}`);
+    return (rows || []).length;
+  } catch (e) { return -1; }   // -1 = unknown; callers treat unknown as "allow"
+}
+
+const transporter = {
+  async sendMail(msg) {
+    const recipients = String(msg.to || '')
+      .split(/[,;]/).map((s) => (s.match(/<([^>]+)>/) || [null, s])[1].trim().toLowerCase())
+      .filter((a) => a && /@/.test(a));
+
+    for (const addr of recipients) {
+      const hourAgo = new Date(Date.now() - 3600000).toISOString();
+      const dayAgo = new Date(Date.now() - 86400000).toISOString();
+      const inHour = await _recentSendCount(addr, hourAgo);
+      // A monitoring failure must never silence a real referral, so an unknown count sends.
+      if (inHour < 0) break;
+      const inDay = await _recentSendCount(addr, dayAgo);
+      if (inHour >= SEND_CAP_PER_HOUR || (inDay >= 0 && inDay >= SEND_CAP_PER_DAY)) {
+        const why = `${addr}: ${inHour}/h, ${inDay}/d - over the cap, send BLOCKED`;
+        console.error(`MAIL CAP: ${why}`);
+        if (!_capAlerted.has(addr)) {
+          _capAlerted.add(addr);
+          try {
+            await _rawTransporter.sendMail({
+              from: `MDconcierge <${ZOHO_USER}>`, to: ADMIN_EMAIL,
+              subject: '⚠ MDconcierge: mail cap hit — sending to one address was stopped',
+              text: `The engine tried to send more than ${SEND_CAP_PER_HOUR} emails in an hour to one address and was stopped.\n\n${why}\n\nNothing further will go to that address this run. This usually means a notification flag is not being set, so the same case is being picked up repeatedly. Worth looking at before it resumes.`,
+              headers: { 'X-MDC-Auto': 'cap-alert' },
+            });
+          } catch (e) { /* the alert failing must not throw inside a send path */ }
+        }
+        return { blocked: true, reason: why };
+      }
+    }
+
+    const res = await _rawTransporter.sendMail(msg);
+    // Record AFTER a successful send, one row per recipient, so the count reflects reality.
+    for (const addr of recipients) {
+      try { await sbPost('audit_log', { case_id: null, action: 'mail_sent', detail: addr, source: 'automation' }); } catch (e) {}
+    }
+    return res;
+  },
+};
 
 async function draftReply(d, payload, toAddr) {
   const refId = payload.case_id;
