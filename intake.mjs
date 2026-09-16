@@ -135,10 +135,21 @@ ${String(body || '').slice(0, 5000)}${docText ? `\n\nAttached document text:${do
     return JSON.parse(txt);
   } catch (e) { console.error('  extractCaseInfo failed: ' + e.message); return {}; }
 }
+// MUST insert with the SERVICE key. cases_public_insert_guard fires on anything arriving as anon
+// and rewrites it into a public web lead: it hard-codes lead_source='injuredguide.com', forces
+// status='new', nulls the routing fields and sets web_lead_notified=false. So every referral email
+// this engine turned into a case was silently refiled as an InjuredGuide lead, and notifyWebLeads()
+// then did its job on it — alerting Eric and mailing the "we'll call you within 2 business days"
+// confirmation to the Email: in the notes, which on a referral email is the REFERRER's address.
+// 16 Sep 2026: that is how a hand-coordinated referral put two web leads in the table a minute
+// apart and sent a patient confirmation to the referring practice. The guard is not the bug; using
+// the anon key here was. SVC is declared further down but read at call time, so this is safe.
 async function insertLead(payload) {
+  const key = SVC || SUPABASE_KEY;
+  if (!SVC) console.error('  insertLead: SUPABASE_SERVICE_KEY missing — the insert guard will refile this as a web lead');
   const res = await fetch(`${SUPABASE_URL}/rest/v1/cases`, {
     method: 'POST',
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(`Supabase insert ${res.status}: ${await res.text()}`);
