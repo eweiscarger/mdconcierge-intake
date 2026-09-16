@@ -13,7 +13,6 @@
 // Nothing here can touch a live recipient link: every write is filtered to note = 'ACCESS REQUEST'.
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import nodemailer from 'nodemailer';
 import webpush from 'web-push';
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY: SVC, ZOHO_USER, ZOHO_APP_PASSWORD,
@@ -22,10 +21,9 @@ const ERIC = ZOHO_USER || 'eric@mdconcierge.net';
 const H = { apikey: SVC, Authorization: `Bearer ${SVC}`, 'Content-Type': 'application/json' };
 const PENDING = "quote_links?note=eq.ACCESS%20REQUEST&revoked=is.true&select=*&order=created_at.asc";
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.zoho.com', port: 465, secure: true,
-  auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD },
-});
+// Outbound goes through the shared capped transport - see mailer.mjs for why. This job chases a
+// blocked person until Eric answers, so a stuck flag here would nag a real partner, not just Eric.
+import { transporter } from './mailer.mjs';
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const ago = ts => {

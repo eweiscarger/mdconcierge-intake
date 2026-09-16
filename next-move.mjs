@@ -6,7 +6,8 @@
 // in mdrx_next_moves for Eric to approve. It SENDS NOTHING (auto-send is gated on the
 // deliverability unlock). Runs on a schedule via GitHub Actions.
 import Anthropic from '@anthropic-ai/sdk';
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 import { readFileSync } from 'node:fs';
 import { emailFaults, linkLabel, optOutLine } from './check.mjs';
 import { doctrine } from './doctrine.mjs';
@@ -557,7 +558,7 @@ async function alertFailure(job, msg) {
     const rows = await sGet(`job_alerts?select=last_alert_at&job=eq.${job}`);
     const last = rows[0]?.last_alert_at ? new Date(rows[0].last_alert_at).getTime() : 0;
     if (Date.now() - last < 3 * 3600 * 1000) return;
-    const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+    const t = transporter;   // shared capped transport
     await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: `[MDconcierge] the ${job} job hit a problem`, text: msg });
     await fetch(`${SUPABASE_URL}/rest/v1/job_alerts`, { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ job, last_alert_at: new Date().toISOString(), last_msg: msg.slice(0, 300) }) });
   } catch (e) { console.error('alertFailure error: ' + e.message); }

@@ -3,7 +3,10 @@
 // and a red banner on a page nobody opened is not a control. This escalates to the manager.
 // Grouped by owner, so it reads as "who is behind on what" the moment there is more than one rep.
 // Each lead escalates once, then goes quiet for 14 days so the digest never becomes noise.
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport: every notification path here is already
+// one-shot per lead with a 14 day quiet window, and the cap is what catches the case where that
+// bookkeeping fails and the same lead escalates in a loop. See mailer.mjs.
+import { transporter } from './mailer.mjs';
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) { if (!v) { console.error('Missing env: ' + k); process.exit(1); } }
@@ -60,7 +63,7 @@ async function main() {
     <p style="font-size:12.5px;color:#6b7a90;margin-top:18px;">Each lead here escalates once, then goes quiet for ${QUIET_DAYS} days. Working the lead or changing its date clears it.</p></div>`;
 
   if (!ERIC_PASS) { console.log(`overdue-escalation: would alert on ${rows.length} lead(s) but no mail password is set.`); return; }
-  const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+  const t = transporter;   // shared capped transport; credentials resolved inside mailer.mjs
   await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: manager, subject: `[MDconcierge] ${rows.length} lead(s) past due by ${DAYS_LATE}+ days`, html, headers: { 'X-MDC-Auto': 'escalation' } });
 
   const now = new Date().toISOString();

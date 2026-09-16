@@ -6,7 +6,8 @@
 //
 // It deliberately does NOT email the physician. Eric asked to be alerted; a surprise reminder to a
 // doctor who booked fifteen minutes reads as pestering, and Zoho already sends the calendar invite.
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -29,10 +30,9 @@ const dayKey = (d) => new Intl.DateTimeFormat('en-CA', {
   timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(d);
 
-const mailer = () => nodemailer.createTransport({
-  host: 'smtp.zoho.com', port: 465, secure: true,
-  auth: { user: ERIC, pass: process.env.ZOHO_ERIC_APP_PASSWORD },
-});
+// Outbound goes through the shared capped transport - see mailer.mjs for why. Kept as a factory so
+// the existing mailer().sendMail call sites below are untouched.
+const mailer = () => transporter;
 
 async function notify(subject, html) {
   await mailer().sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC}>`, to: ERIC, subject, html, headers: { 'X-MDC-Auto': 'reminder' } });

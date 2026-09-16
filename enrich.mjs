@@ -10,7 +10,8 @@
 // name they use. Rank candidates by specialty + city + first-name similarity.
 // Never re-suggest an NPI Eric already rejected for that contact.
 // Runs on a schedule via GitHub Actions. No API key needed (NPPES is free/public).
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -77,7 +78,7 @@ main().catch(async (e) => {
   if (/timeout|econnreset|econnrefused|enotfound|socket|network|fetch failed/i.test(msg)) { console.warn('transient, skipping run: ' + msg); process.exit(0); }
   console.error('enrich fatal: ' + (e?.stack || e));
   try {
-    const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+    const t = transporter;   // shared capped transport
     await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] enrich agent error', text: msg });
   } catch (_e) {}
   process.exit(0);

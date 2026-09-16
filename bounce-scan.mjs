@@ -11,7 +11,8 @@
 // and it threatens the sending domain rather than one record.
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 import { deriveState, pick, npiLookup, score, relocationDelta } from './npi.mjs';
 
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -56,7 +57,7 @@ function classifyBounce(blob) {
 
 async function alertEric(subject, text) {
   try {
-    const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+    const t = transporter;   // shared capped transport
     await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject, text });
   } catch (e) { console.error('alert failed: ' + e.message); }
 }

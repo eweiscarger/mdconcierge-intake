@@ -11,7 +11,8 @@
 //
 // Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, MDRX_ERIC_PASS (or ERIC_APP_PASSWORD).
 
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -162,7 +163,7 @@ async function main() {
     console.error(`pdrx-intake-watch: ${rows.length} intake(s) waiting but no mail password is set. NOT marking them, so they send once it is.`);
     process.exit(1);
   }
-  const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+  const t = transporter;   // shared capped transport
 
   for (const r of rows) {
     const p = r.payload || {};

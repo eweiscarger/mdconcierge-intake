@@ -6,7 +6,8 @@
 // is the thing he wants to know: did they go out.
 //
 // It reports what the outbox says, not what any job claims. A row with a sent_at is mail that left.
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -71,6 +72,6 @@ const subject = sent.length
     ? `[MDconcierge] nothing sent this morning, ${held.length} held`
     : '[MDconcierge] nothing sent this morning';
 
-const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+const t = transporter;   // shared capped transport
 await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject, text: lines.join('\n') });
 console.log(subject + ` | sent=${sent.length} held=${held.length} pending=${stillPending}`);

@@ -14,7 +14,8 @@
 // and only to say the job failed.
 //
 // DRY=1 makes it read-only: every write is printed and nothing is written.
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
@@ -414,7 +415,7 @@ main().catch(async (e) => {
   // days in September. This is the only mail this file can send, and only to him.
   if (ERIC_PASS && !DRY) {
     try {
-      const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+      const t = transporter;   // shared capped transport
       await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] the desk job hit a problem', text: msg.slice(0, 2000) });
     } catch (_) {}
   }

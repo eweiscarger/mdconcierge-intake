@@ -11,7 +11,8 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import Anthropic from '@anthropic-ai/sdk';
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
 const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
@@ -443,7 +444,7 @@ async function alertFailure(job, msg) {
     const rows = await sGet(`job_alerts?select=last_alert_at&job=eq.${job}`);
     const last = rows[0]?.last_alert_at ? new Date(rows[0].last_alert_at).getTime() : 0;
     if (Date.now() - last < 3 * 3600 * 1000) return; // throttle
-    const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+    const t = transporter;   // shared capped transport
     await t.sendMail({ from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: `[MDconcierge] the ${job} job hit a problem`, text: `The ${job} job failed with a non-transient error:\n\n${msg}\n\nIt retries on its schedule. Check the GitHub Actions logs if it persists.` });
     await fetch(`${SUPABASE_URL}/rest/v1/job_alerts`, { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ job, last_alert_at: new Date().toISOString(), last_msg: msg.slice(0, 300) }) });
     console.log(`alerted Eric about ${job} failure`);

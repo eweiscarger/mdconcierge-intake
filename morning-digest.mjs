@@ -10,7 +10,8 @@
 //
 // It sends to eric@mdconcierge.net and to no other address, ever. If there is nothing worth saying,
 // it sends nothing.
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
@@ -172,7 +173,7 @@ async function main() {
   if (DRY) { console.log('morning-digest: DRY, nothing sent.'); return; }
   if (!ERIC_PASS) { console.log('morning-digest: no mail password set, printed only.'); return; }
 
-  const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+  const t = transporter;   // shared capped transport
   await t.sendMail({ headers: { 'X-MDC-Bot': 'engine', 'X-MDC-Auto': 'desk-digest' }, from: `"The desk" <${ERIC_USER}>`, to: ERIC_USER, subject, text });
   console.log(`morning-digest: sent to ${ERIC_USER}.`);
 }
@@ -183,7 +184,7 @@ main().catch(async (e) => {
   if (/timeout|econnreset|econnrefused|enotfound|socket hang up|fetch failed|502|503|504/i.test(msg)) process.exit(1);
   if (ERIC_PASS && !DRY) {
     try {
-      const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+      const t = transporter;   // shared capped transport
       await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] the morning digest hit a problem', text: msg.slice(0, 2000) });
     } catch (_) {}
   }

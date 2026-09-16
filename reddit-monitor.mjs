@@ -10,7 +10,8 @@
 //             draft, and stores everything in reddit_leads.
 // MODE=digest emails Eric every drafted answer not yet sent, once a day, and marks them emailed.
 import Anthropic from '@anthropic-ai/sdk';
-import nodemailer from 'nodemailer';
+// Outbound goes through the shared capped transport - see mailer.mjs for why.
+import { transporter } from './mailer.mjs';
 
 const { ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
@@ -158,7 +159,7 @@ ${rows.map((r, i) => `<div style="border:1px solid #e5e7eb;border-radius:8px;pad
 </div>`).join('')}
 <p style="font-size:12px;color:#6b7280;">Reddit removes accounts that promote. Keep most answers link-free and only mention the site where it genuinely helps.</p></div>`;
   const text = rows.map((r, i) => `${i + 1}. r/${r.subreddit} (${r.state}) ${r.title}\n${r.url}\n\nSuggested reply:\n${r.draft}\n`).join('\n----------\n\n');
-  const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+  const t = transporter;   // shared capped transport
   await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"InjuredGuide monitor" <${ERIC_USER}>`, to: ERIC_USER, subject: `${rows.length} Reddit post${rows.length === 1 ? '' : 's'} worth answering`, text, html });
   const ids = rows.map((r) => `"${r.post_id}"`).join(',');
   await sPatch(`reddit_leads?post_id=in.(${ids})`, { status: 'emailed', emailed_at: new Date().toISOString() });
@@ -170,7 +171,7 @@ ${rows.map((r, i) => `<div style="border:1px solid #e5e7eb;border-radius:8px;pad
   console.error('reddit-monitor failed: ' + msg);
   if (/credit balance|every Reddit feed failed/i.test(msg)) {
     try {
-      const t = nodemailer.createTransport({ host: 'smtp.zoho.com', port: 465, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS } });
+      const t = transporter;   // shared capped transport
       await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] the Reddit monitor hit a problem', text: msg });
     } catch (_) {}
   }
