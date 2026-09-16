@@ -6,7 +6,16 @@ name: Outreach cadence
 # physician never receives an automated follow-up.
 on:
   schedule:
-    - cron: '10 12 * * *'   # weekdays ~8:10am ET
+    # Queue BEFORE the send window opens, not after it closes. At 8:10am ET this ran 40 minutes
+    # past the end of the 06:30-07:30 window, so nextSlot could only ever give a row the FOLLOWING
+    # morning: every touch sat a full day before it was eligible. 09:40 UTC is 05:40 ET, which
+    # leaves the queue built and waiting when the window opens.
+    # Every day, not 1-5: weekday-restricted crons were not firing here, so the weekend guard in
+    # the step below is what stops it.
+    # EDT (UTC-4), correct until the clocks go back on 1 Nov 2026, then shift to '40 10'. The EST
+    # entry is deliberately not pre-loaded: in September it would fire at 06:40 ET, rebuilding the
+    # queue in the middle of the 06:30-07:30 send window.
+    - cron: '40 9 * * *'    # ~5:40am ET, ahead of the 6:30 send window
   workflow_dispatch:
     inputs:
       tier:

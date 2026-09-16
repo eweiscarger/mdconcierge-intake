@@ -20,7 +20,30 @@ on:
         default: ''
 
   schedule:
-    - cron: '*/15 10-21 * * *'   # 6am to 5pm Eastern, the before-clinic window
+    # Eric, 15 Sep 2026: "the emails are supposed to go out at 7am man". They were not. The
+    # window config was right all along (06:30-07:30 ET, jittered per physician); this job simply
+    # was not awake. '*/15 10-21' asks for 48 runs a day and GitHub was delivering three to five,
+    # the earliest around 09:19 ET. So every batch waited for the first run of the day and then
+    # left in one clump: 17 emails at 12:08 on 14 Sep, 13 at 10:37 on 15 Sep. That clump is also a
+    # deliverability problem, because the per-physician jitter exists precisely so a batch does not
+    # look machine-timed, and sending them all in one minute throws that away.
+    #
+    # Discrete crons are honoured far more reliably than a high-frequency band, so the send window
+    # is now spelled out minute by minute. Times are UTC and Eastern is UTC-4 from March to
+    # November; the extra 11:30-12:35 entries cover 06:30-07:35 ET once the clocks go back, and the
+    # send-window config in outreach_config is what actually decides, computed in the physician's
+    # own timezone, so the out-of-season attempts simply find nothing due.
+    # Every day, not 1-5: this repo already found that weekday-restricted crons were not firing,
+    # which is why every job here runs daily and stops itself on the weekend in the step below.
+    # These are EDT (UTC-4), correct until the clocks go back on 1 Nov 2026. They are NOT
+    # pre-loaded with the EST equivalents: in September those would fire at 07:30-08:30 ET, which
+    # is outside the window and burns the scarce morning runs this fix exists to protect. Shift
+    # each hour up by one in November.
+    - cron: '25,35,45,55 10 * * *'    # 06:25-06:55 ET
+    - cron: '5,15,25 11 * * *'        # 07:05-07:25 ET
+    # Sparse backstop so an answer or a manually queued row is never stranded all day. These are
+    # outside the cold-outreach window, and the window logic refuses cold mail at these hours.
+    - cron: '20 15,18,21 * * *'
     # Eric, 8 Sep 2026: one batch goes out Thursday evening instead of before clinic, because the
     # physicians who read these do it at night. 8pm Eastern is midnight UTC, which the band above
     # does not reach. Thursday 8pm ET is Friday 00:00 UTC, hence day 5 here.
