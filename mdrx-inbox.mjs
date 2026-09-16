@@ -115,6 +115,40 @@ You do TWO things and return STRICT JSON only, no prose:
    - "optout": EXPLICITLY asks to stop being contacted ("unsubscribe","take me off","stop emailing","remove me"). Only use optout when the request to stop is unmistakable and explicit.
    If you cannot clearly tell whether a reply is a soft decline or a real opt-out, classify it "workable" and set hot=true so Eric reviews it himself. NEVER auto-suppress a contact on doubt; a permanent opt-out must be earned by an explicit request.
    A teammate message is always "workable".
+THE THREE WORDS. The cold sequence asks a physician to reply with one word, and each word is a rung on the same ladder. The three are interested, Ready and Start. These are the highest intent replies on the book and none of them may be treated as ordinary correspondence. Match on the word appearing anywhere in the reply body, in any case, alone or in a sentence. If the physician uses two of them, take the highest rung.
+
+   - "INTERESTED": he wants the ruling, the program and the compliance. Set intent to "interested".
+     READ THE WHOLE SENTENCE BEFORE YOU MATCH THIS ONE. "Not interested", "we are not interested",
+     "I would not be interested" and every other negation is a DECLINE and the exact opposite of
+     this rung. A bare "interested", or plainly interested wording like "yes interested" or "very
+     interested, send it over", is the rung. If the word appears inside a negation, it is a decline,
+     never intent. When you genuinely cannot tell, classify workable, set hot, set intent null, and
+     let Eric read it. Never route a decline as intent and never suppress anyone on this word.
+     Sentiment is always workable and hot is always true.
+     What goes back is FIXED, not composed: the 700 Pharmacy decision named plainly, one line on
+     what Daniel Siegel argued and one on what Alice Gosfield's analysis adds, the three links, and
+     the MDRx brief. No ask of any kind in that reply. He said send it, not let us talk, and asking
+     for anything the same day he extended you access spends the goodwill instead of banking it.
+
+   - "READY": he wants to fully understand the program and review the agreements and the legal
+     opinion, WITHOUT talking to anyone yet. Set intent to "ready". Workable, hot.
+     That reluctance to talk is the whole point of the word. Do NOT answer a "Ready" with an offer
+     of a call, a Zoom, a calendar link or a visit. He has told you what he wants and it is the
+     documents. Anything else reads as a bait and switch and it will cost the lead.
+     Eric sends the agreements and the legal opinion himself. Draft the covering note only, short,
+     and say the documents are attached.
+
+   - "START": he wants to begin. Set intent to "start". Workable, hot, and this is the single most
+     valuable reply in the system. What he needs is the onboarding form, which collects the NPI, his
+     cell, and the LLC name and address. Draft a short note pointing him at it and offering to walk
+     it through with him if he would rather. Nothing else in that email.
+
+   Ready and Start are close enough that physicians will use them interchangeably, and someone will
+   say "ready" meaning sign me up. Never guess between them. When the wording is ambiguous, take the
+   higher rung, set hot, and let Eric read it.
+
+   For any reply that is not one of the three, set intent to null and behave as before.
+
 2) Set "hot": true if the reply is time-sensitive, high-intent (ready to move/sign/book), OR touches legal/compliance/regulatory matters that need Eric's careful eye. Otherwise false.
 3) "draft": Only for "workable" senders, write the reply body in Eric's voice. For "decline" or "optout", return "".
 
@@ -135,7 +169,7 @@ Referral Management • Work Comp Pharmacy • Ancillary Coordination
 
 4) "proposed_time": if the sender names a specific time they want the call, return it as "YYYY-MM-DDTHH:MM" in Eastern wall-clock time. Resolve relative days ("Thursday", "tomorrow", "next week") against TODAY, given below, and always resolve forward: a weekday already past this week means the next one. Business hours are meant, so a bare "2" or "2 o'clock" is 14:00, and only take a morning reading when they say morning or am. Return "" unless they have named a time firmly enough to put in a diary: "Thursday at 2" and "how about 10am Tuesday" qualify, "sometime next week", "an afternoon works" and "I am free Thursdays" do not. If they offer several, return the first. If they are moving or cancelling an existing call rather than making one, return "".
 
-Return ONLY: {"sentiment":"...","hot":true|false,"draft":"...","proposed_time":"..."}`;
+Return ONLY: {"sentiment":"...","hot":true|false,"intent":"interested"|"ready"|"start"|null,"draft":"...","proposed_time":"..."}`;
   const today = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
   const todayISO = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).toISOString().slice(0, 10);
   const user = `TODAY is ${today} (${todayISO}), Eastern time. This email is from ${who} <${fromAddr}>${isTeam ? ' (an MDRx360 TEAMMATE, not a prospect)' : ''}. Subject: "${subject}".\n\nFull thread (most recent on top):\n"""\n${String(body || '').slice(0, 4500)}\n"""`;
@@ -147,21 +181,64 @@ Return ONLY: {"sentiment":"...","hot":true|false,"draft":"...","proposed_time":"
     let s = String(o.sentiment || '').toLowerCase();
     if (!['workable', 'decline', 'optout'].includes(s)) s = 'workable'; // parse safety: leave for human, never auto-suppress on doubt
     if (isTeam) s = 'workable';
-    return { sentiment: s, hot: !!o.hot, draft: (o.draft || '').trim(), proposedTime: String(o.proposed_time || '').trim() };
+    const intent = ['interested', 'ready', 'start'].includes(String(o.intent || '').toLowerCase())
+      ? String(o.intent).toLowerCase() : null;
+    // One of the three words is always hot, whatever the model thought.
+    return { sentiment: s, hot: !!o.hot || !!intent, intent, draft: (o.draft || '').trim(), proposedTime: String(o.proposed_time || '').trim() };
   } catch (e) {
     console.error('analyze failed: ' + e.message);
-    return { sentiment: 'workable', hot: false, draft: '', proposedTime: '' }; // safe default: surfaced to Eric, no auto-routing side effects beyond flag
+    return { sentiment: 'workable', hot: false, intent: null, draft: '', proposedTime: '' }; // safe default: surfaced to Eric, no auto-routing side effects beyond flag
   }
 }
 
 async function main() {
   // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
-  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type,cell,office_phone,funnel_token');
+  const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type,cell,office_phone,funnel_token,practice_id,practice_name');
   const existing = await sGet('mdrx_inbox_drafts?select=message_uid');
   const seen = new Set((existing || []).map(d => d.message_uid));
   const supp = await sGet('suppressions?select=email');
   const suppressed = new Set((supp || []).map(s => (s.email || '').toLowerCase()));
   const byEmail = {}; (provs || []).forEach(p => { if (p.email) byEmail[p.email.toLowerCase()] = p; });
+
+  // Jackie Tillou wrote in twelve times from jackiet@mountainvalleyortho.com and not one of those
+  // messages reached a record, because this matched a PROVIDER's own address and nothing else. She
+  // is contact #7, the practice administrator, and the person who makes the introductions this
+  // business depends on. Marc at SJB (#23) and Steve (#1) were lost the same way. Meanwhile the
+  // Sent scanner has always matched staff and practice domains, so Eric's replies attached to the
+  // timeline while the messages they answered did not: one conversation, filed in two places, with
+  // nothing anywhere saying a thread was half missing.
+  const cons = await sGet('mdrx_contacts?select=id,name,email,title,role,provider_id,practice_id');
+  const provById = {}; (provs || []).forEach((p) => { provById[p.id] = p; });
+  const contactByEmail = {};
+  (cons || []).forEach((c) => { if (c.email) contactByEmail[String(c.email).toLowerCase()] = c; });
+  // A domain is only safe to match where it belongs to exactly one practice. Several leads share
+  // gmail.com, and our own domains are us, so those can never identify anybody.
+  const OURS_OR_FREE = /^(mdconcierge\.net|mdrx360\.com|veromed\.health|gmail\.com|yahoo\.com|outlook\.com|hotmail\.com|aol\.com|icloud\.com|me\.com|comcast\.net|verizon\.net)$/i;
+  const practiceByDomain = {};
+  (provs || []).forEach((p) => {
+    const d = String(p.email || '').split('@')[1];
+    if (!d || OURS_OR_FREE.test(d)) return;
+    const key = p.practice_id || p.practice_name || ('p' + p.id);
+    (practiceByDomain[d] = practiceByDomain[d] || { keys: new Set(), prov: p }).keys.add(key);
+  });
+  // Address first, then a staff contact, then the practice domain. Returns the provider the message
+  // belongs to and HOW it was matched, so the record shows why a message landed where it did.
+  const matchLead = (addr) => {
+    const a = String(addr || '').toLowerCase();
+    if (!a) return { prov: null, how: null, contact: null };
+    if (byEmail[a]) return { prov: byEmail[a], how: 'address', contact: null };
+    const c = contactByEmail[a];
+    if (c) {
+      const p = c.provider_id ? provById[c.provider_id]
+        : (c.practice_id ? (provs || []).find((x) => x.practice_id === c.practice_id) : null);
+      if (p) return { prov: p, how: 'staff contact', contact: c };
+      return { prov: null, how: null, contact: c };
+    }
+    const d = a.split('@')[1];
+    const hit = d ? practiceByDomain[d] : null;
+    if (hit && hit.keys.size === 1) return { prov: hit.prov, how: 'practice domain', contact: null };
+    return { prov: null, how: null, contact: null };
+  };
 
   const client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ERIC_USER, pass: ERIC_PASS }, logger: false });
   await client.connect();
@@ -169,7 +246,11 @@ async function main() {
   let created = 0, scanned = 0, routed = 0;
   try {
     const total = client.mailbox?.exists || 0;
-    const start = Math.max(1, total - 24);
+    // 25 was the window, and a busy hour silently outran it: this job is the only thing that sees
+    // an inbound message, so anything that scrolls past before a run is never seen by the CRM at
+    // all. Dedupe is global (every message_uid already drafted), so a wider window costs a little
+    // parsing and cannot produce a duplicate.
+    const start = Math.max(1, total - 79);
     for await (const m of client.fetch(`${start}:*`, { envelope: true, source: true })) { // BODY.PEEK, no \Seen
       scanned++;
       const env = m.envelope || {};
@@ -179,7 +260,8 @@ async function main() {
       const mid = env.messageId || ('uid:' + m.uid);
       if (seen.has(mid)) continue;
       if (NOISE.test(fromAddr) || fromAddr === 'referrals@mdconcierge.net' || fromAddr === 'eric@mdconcierge.net') continue;
-      const prov = byEmail[fromAddr];
+      const hit = matchLead(fromAddr);
+      const prov = hit.prov;
       const isTeam = TEAM.test(fromAddr);
       // What counts as our mail. The old test looked for "workers comp" and Jackie Tillou writes
       // "Workcomp", one word, in every introduction she makes. Amanda Dowdy of Bone & Joint
@@ -203,7 +285,7 @@ async function main() {
 
       // Classify + draft (cap the model spend per run).
       const a = created < 10 ? await analyzeAndDraft(who, fromAddr, subject, bodyText, isTeam)
-                             : { sentiment: 'workable', hot: false, draft: '', proposedTime: '' };
+                             : { sentiment: 'workable', hot: false, intent: null, draft: '', proposedTime: '' };
 
       // ---- Better ways to reach him -------------------------------------------------------
       // Every touch now asks: if phone or text is easier, send your cell or a personal email.
@@ -321,7 +403,7 @@ async function main() {
         from_addr: fromAddr, from_name: from.name || '', to_addrs: ERIC_USER,
         subject, body_text: String(bodyText || '').slice(0, 20000),
         sent_at: env.date || new Date().toISOString(),
-        provider_id: prov ? prov.id : null, matched_by: prov ? 'address' : null,
+        provider_id: prov ? prov.id : null, matched_by: hit.how,
       });
 
       // The reply also becomes a next move on his record, so it is waiting in the profile where Eric
