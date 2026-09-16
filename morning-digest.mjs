@@ -58,7 +58,7 @@ async function main() {
   ]);
 
   const dueToday = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_stage,next_step,funnel_next_date&suppressed=eq.false&on_hold=eq.false&funnel_stage=not.in.(${TERMINAL.map(encodeURIComponent).join(',')})&funnel_next_date=lte.${today}&order=funnel_next_date.asc&limit=500`);
-  const hotLeads = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_stage,next_step,needs_attention,priority&suppressed=eq.false&on_hold=eq.false&funnel_stage=not.in.(${TERMINAL.map(encodeURIComponent).join(',')})&or=(needs_attention.is.true,priority.eq.high)&limit=200`);
+  const active = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,funnel_stage,next_step,needs_attention,priority&suppressed=eq.false&on_hold=eq.false&funnel_stage=not.in.(${TERMINAL.map(encodeURIComponent).join(',')})&limit=1000`);
 
   // One lookup for every person named anywhere in the mail.
   const ids = [...new Set([...sent, ...held, ...queued, ...replies, ...items, ...drafts, ...moves].map((r) => r.provider_id).filter(Boolean))];
@@ -107,6 +107,15 @@ async function main() {
   section('WHO WROTE IN', [...repliedBy.values()].slice(0, 20).map((r) => `  ${who(r.provider_id)}: "${String(r.subject || '').slice(0, 90)}" on ${shortDate(r.sent_at)}`));
 
   // ---- who is hot ------------------------------------------------------------------------------
+  // Hot means real signal: they wrote back, a time is on the calendar, or a deal is closing.
+  // Not simply that the desk flagged them this morning, which would make this section a second
+  // copy of GONE QUIET, and the two lists did read identically the first time this ran.
+  const HOT_STAGES = ['Replied', 'Meeting Requested', 'Meeting Booked', 'Closing'];
+  const quietIds = new Set(quiet.map((i) => i.provider_id));
+  const hotLeads = active
+    .filter((p) => !quietIds.has(p.id))
+    .filter((p) => HOT_STAGES.includes(String(p.funnel_stage || '')) || p.priority === 'high')
+    .sort((a, b) => HOT_STAGES.indexOf(String(b.funnel_stage)) - HOT_STAGES.indexOf(String(a.funnel_stage)));
   const hotDrafts = drafts.filter((d) => d.hot);
   const hotLines = [];
   for (const p of hotLeads.slice(0, 12)) hotLines.push(`  ${name(p)}${p.practice_name ? ', ' + p.practice_name : ''} (${p.funnel_stage}): ${String(p.next_step || 'no next step').slice(0, 110)}`);
@@ -123,7 +132,9 @@ async function main() {
   section('WAITING ON AN ANSWER FROM YOU', waiting.slice(0, 12).map((i) => `  ${who(i.provider_id)}: ${String(i.detail || '').slice(0, 200)}`));
 
   // ---- gone quiet ------------------------------------------------------------------------------
-  section('GONE QUIET', quiet.slice(0, 15).map((i) => `  ${who(i.provider_id)}: ${String(i.detail || '').slice(0, 200)}`));
+  const quietLines = quiet.slice(0, 15).map((i) => `  ${who(i.provider_id)}: ${String(i.detail || '').slice(0, 200)}`);
+  if (quiet.length > 15) quietLines.push(`  and ${quiet.length - 15} more.`);
+  section('GONE QUIET', quietLines);
 
   // ---- queued today ----------------------------------------------------------------------------
   const queueLines = [];
