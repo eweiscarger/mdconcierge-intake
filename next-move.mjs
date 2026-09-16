@@ -98,7 +98,11 @@ function draftToCard(draft, p) {
 }
 
 async function promoteDueMoves() {
-  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft,subject&status=eq.pending&recommended_date=lte.${today}&order=recommended_date.asc`);
+  // 'approved' is included deliberately. Until now the promoter read only 'pending', while the
+  // Approve button set the row to 'approved' - so approving a move was the single action that
+  // guaranteed it would never go out, and unapproved drafts were the only ones that did. Eric's
+  // approval is the point of the queue, not a reason to bury the row.
+  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft,subject,status&status=in.(pending,approved)&recommended_date=lte.${today}&order=recommended_date.asc`);
   if (!due || !due.length) return 0;
   // Eric's real openings, phrased his way, for the {{days}} token.
   const slotPhrase = await availabilityPhrase();
@@ -119,22 +123,38 @@ async function promoteDueMoves() {
     // never sent: 176 distinct angles across 196 moves is what that produced, including a retired
     // subject line and a reply to an out-of-office. Eric's six approved templates are the only
     // words that leave here, and anything they do not cover goes back to him as a recommendation.
-    const tplKey = templateForAngle(mv.angle);
-    if (!tplKey) {
-      console.log(`next-move: move ${mv.id} ("${String(mv.angle || '').slice(0, 60)}") matches no approved template. Left as a recommendation.`);
-      continue;
-    }
-    const draft = renderTemplate(tplKey, {
-      last: p.last_name || '', first: p.first_name || '',
-      days: slotPhrase,
-      booklink: p.funnel_token ? `${SITE}/go.html?p=${p.funnel_token}&to=book` : '',
-      // A template whose tokens cannot all be filled renders null, which sends it back to Eric
-      // rather than out with a brace still in the text.
-      when: mv.when || '', introducer: mv.introducer || '', state: p.state || '',
-    });
-    if (!draft) {
-      console.log(`next-move: move ${mv.id} matched ${tplKey} but the record lacks something it needs. Left as a recommendation.`);
-      continue;
+    // A row Eric approved carries HIS wording, edited in the cockpit and saved on the row. It is
+    // sent verbatim: approving one set of words and then sending different words generated from a
+    // template is worse than sending nothing, and it is the reason the approve path is trusted.
+    // Only a row he has NOT reviewed goes through the template machinery, where the agent picks who
+    // and which situation but never what to say.
+    const isApproved = String(mv.status || '') === 'approved';
+    let tplKey, draft;
+    if (isApproved) {
+      draft = String(mv.draft || '').trim();
+      if (!draft) {
+        console.log(`next-move: move ${mv.id} is approved but has no text on the row. Left alone.`);
+        continue;
+      }
+      tplKey = 'next_move';
+    } else {
+      tplKey = templateForAngle(mv.angle);
+      if (!tplKey) {
+        console.log(`next-move: move ${mv.id} ("${String(mv.angle || '').slice(0, 60)}") matches no approved template. Left as a recommendation.`);
+        continue;
+      }
+      draft = renderTemplate(tplKey, {
+        last: p.last_name || '', first: p.first_name || '',
+        days: slotPhrase,
+        booklink: p.funnel_token ? `${SITE}/go.html?p=${p.funnel_token}&to=book` : '',
+        // A template whose tokens cannot all be filled renders null, which sends it back to Eric
+        // rather than out with a brace still in the text.
+        when: mv.when || '', introducer: mv.introducer || '', state: p.state || '',
+      });
+      if (!draft) {
+        console.log(`next-move: move ${mv.id} matched ${tplKey} but the record lacks something it needs. Left as a recommendation.`);
+        continue;
+      }
     }
     // These are not marketing. A follow-up Eric sends to one physician he is talking to gets no
     // unsubscribe line and no campaign card: an opt-out at the bottom announces the email as a
