@@ -1,0 +1,45 @@
+name: The desk (keeper)
+
+# Runs first, before anything else touches the book. Every live lead gets a next step and a date,
+# anything gone quiet is flagged, anyone waiting on an answer is flagged, and every commitment Eric
+# made in his own sent mail that has not been kept becomes a row in desk_items.
+# It sends nothing to a prospect. The only mail it can send is a failure note to Eric.
+on:
+  schedule:
+    - cron: '50 11 * * *'   # weekday mornings, ~7:50am ET, ahead of the cadence at 8:10
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: 'Set to 1 to print what it would write and write nothing'
+        required: false
+        default: ''
+
+concurrency:
+  group: desk
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  keep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Keep the book
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          node desk.mjs

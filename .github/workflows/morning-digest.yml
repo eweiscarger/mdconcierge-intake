@@ -1,0 +1,45 @@
+name: Morning digest
+
+# One email a weekday morning, to Eric, replacing the scatter of separate alerts. It runs after the
+# desk has kept the book (7:50), the cadence has queued (8:10), Scribe has drafted (8:23) and the
+# send window has closed, so it reports the morning that actually happened.
+# It writes to eric@mdconcierge.net and to no other address. With nothing to say it sends nothing.
+on:
+  schedule:
+    - cron: '45 12 * * *'   # weekday mornings, ~8:45am ET
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: 'Set to 1 to print the digest and send nothing'
+        required: false
+        default: ''
+
+concurrency:
+  group: morning-digest
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Write the desk back to Eric
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          node morning-digest.mjs
