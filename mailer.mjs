@@ -48,7 +48,7 @@ export const SEND_CAP_PER_DAY = 25;
 
 const _raw = nodemailer.createTransport({
   host: 'smtp.zoho.com', port: 465, secure: true,
-  auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD },
+  auth: { user: MAIL_USER, pass: MAIL_PASS },
 });
 
 const _alerted = new Set();   // alert Eric once per address per run, never once per blocked message
@@ -101,7 +101,7 @@ export const transporter = {
           _alerted.add(addr);
           try {
             await _raw.sendMail({
-              from: `MDconcierge <${ZOHO_USER}>`, to: ADMIN_EMAIL,
+              from: `MDconcierge <${MAIL_USER}>`, to: ADMIN_EMAIL,
               subject: 'MDconcierge: mail cap hit - sending to one address was stopped',
               text: `The engine tried to send more than ${SEND_CAP_PER_HOUR} emails in an hour to one address and was stopped.\n\n${why}\n\nNothing further goes to that address this run. This usually means a notification flag is not being set, so the same case is being picked up again and again. Worth looking at before it resumes.`,
               headers: { 'X-MDC-Auto': 'cap-alert' },
