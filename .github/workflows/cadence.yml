@@ -54,6 +54,10 @@ jobs:
           MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # The managing editor fails CLOSED: with no key it blocks every email and the cadence
+          # queues nothing at all. cadence.mjs imports editor.mjs as of 17 Sep 2026, so this key
+          # has to reach the runner or the fix for the duplicated opener becomes a silent outage.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           BATCH_SIZE: ${{ github.event.inputs.limit }}
         run: |
           # The cron runs every day because weekday-restricted schedules were not firing.

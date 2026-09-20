@@ -22,7 +22,12 @@ const DASH = /[–—]/;                                    // en dash, em dash
 // had a chance" does not, because only one of those could have been written without the tracking.
 const TRACKING = /\b(saw|noticed)\b[^.]{0,40}\byou\b|\byou (?:have been|and your team) (?:looking|reading|spent|in)\b|spent (?:some )?time in the|thanks for taking a look|going back through|\b(?:since|now that|after|given)\b[^.]{0,45}\b(?:had a chance to look|looked (?:at|through)|been through|went through|ran the numbers|worked through)\b/i;
 const BANNED = /own volume|favorable opinion in writing|what it comes to against/i;
-const DISPENSING = /prohibit\w* (physicians )?from dispensing|dispens\w+ (in|at) (the|your) office|office dispensing|\b2014\b/i;
+// Eric, 10 September 2026: also catch the DENIALS, not just the mentions. A physician in
+// Pennsylvania work comp was never thinking about in-office dispensing, so telling him he will not
+// be doing it plants an objection he did not have and makes the program sound heavier than it is.
+// Three separate drafts shipped a version of "you never dispense anything in the office, you do not
+// stock anything" before this pattern was widened.
+const DISPENSING = /prohibit\w* (physicians )?from dispensing|dispens\w+ (in|at) (the|your) office|office dispensing|(?:never|not|dont|do not|don't|nothing is|no) (?:\w+ ){0,3}(?:dispens|stock)\w*(?: \w+){0,3} (?:in|at) (?:the|your) office|(?:never|dont|do not|don't) (?:\w+ ){0,2}(?:stock|staff) (?:anything|a pharmacy)|\b2014\b/i;
 // American spelling. The old list knew only the -ise verbs, so "programme" reached two queued
 // emails and "modelled" reached a live page before anyone caught them by eye.
 // One literal rather than strings joined together: the escaping has to be right only once, and a
@@ -148,7 +153,12 @@ export function emailFaults(m) {
   // for having no opt-out while carrying a perfectly good one: 11 of 11 on 28 Aug, 20 of 20 on
   // 31 Aug, 26 of 26 on 1 Sep, 27 of 27 on 2 Sep. Touch 5 says "aren't" in its body and passed
   // throughout, which is what made the failure look like a template problem rather than a regex.
-  const OPTOUT = /no longer like to hear|(?:are not|aren.t) interested|don.t wish to hear|rather i stop|unsubscribe\.html/i;
+  // 17 Sep 2026: Eric reworded the opt-out to "if you don't see Workers' Comp or you're not
+  // interested, just reply not interested and you won't hear from me anymore". The old pattern
+  // wanted the literal "are not interested", which "you're not interested" does not contain, so
+  // the new line would have been invisible to this rule and every cold email refused for carrying
+  // no opt-out. Matching "not interested" in any form covers both wordings and anything close.
+  const OPTOUT = /no longer like to hear|not interested|don.t wish to hear|rather i stop|reply stop|unsubscribe\.html/i;
   // Only campaign mail carries an opt-out. A one to one email Eric writes to a physician he is in
   // conversation with is not marketing, and an unsubscribe line at the bottom of it announces that
   // it is, which is both untrue and the exact impression the letter format exists to avoid. The
@@ -235,6 +245,53 @@ export function emailFaults(m) {
   if (/UNKNOWN LINK:/.test(html)) f.push('a link has no label for its destination');
   if (/see the details/i.test(vis)) f.push('a button says nothing');
   if (/signature attaches here/i.test(vis)) f.push('preview placeholder left in the body');
+
+  // REDUNDANCY. 17 Sep 2026: ten cold emails went to physicians at Rothman, OAA, Lancaster Ortho
+  // and TriRivers with the opener printed twice, because the sentence was both prepended in code
+  // and pasted at the top of bodies 2, 3 and 4. Every rule above this one was about WHAT the email
+  // says; nothing checked whether it said the same thing twice. Eric, that morning: "there cannot
+  // be any redundancy, mistakes or things that don't make sense."
+  for (const half of [['plain text', text], ['designed email', vis]]) {
+    const [where, body] = half;
+    if (!body.trim()) continue;
+
+    // Repeated paragraph. Compared on letters and digits only, so punctuation or a line break
+    // cannot disguise the same paragraph appearing twice.
+    const paras = body.split(/\n{2,}|(?<=\.)\s{2,}/)
+      .map((p) => p.replace(/\s+/g, ' ').trim())
+      .filter((p) => p.length > 25);
+    const seenPara = new Map();
+    for (const p of paras) {
+      const key = p.toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim();
+      if (!key) continue;
+      if (seenPara.has(key)) { f.push(`the same paragraph appears twice in the ${where}`); break; }
+      seenPara.set(key, true);
+    }
+
+    // Repeated sentence, which catches a duplicate that sits inside a larger paragraph.
+    const sents = body.split(/(?<=[.!?])\s+/)
+      .map((s) => s.replace(/\s+/g, ' ').trim())
+      .filter((s) => s.length > 30);
+    const seenSent = new Map();
+    for (const s of sents) {
+      const key = s.toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim();
+      if (!key) continue;
+      if (seenSent.has(key)) { f.push(`the same sentence appears twice in the ${where}`); break; }
+      seenSent.set(key, true);
+    }
+  }
+
+  // The cold opener specifically. It is prepended once at send time and must never also be baked
+  // into a template body. Named explicitly so the run log says what happened rather than making
+  // someone diff two paragraphs to find it.
+  const openerHits = (t) => (String(t).match(/love sending cold emails/gi) || []).length;
+  if (openerHits(text) > 1) f.push('the cold opener appears more than once in the plain text');
+  if (openerHits(vis) > 1) f.push('the cold opener appears more than once in the designed email');
+
+  // Unresolved template plumbing reaching a physician.
+  if (/\{\{|\}\}|\$\{|\[FIRST|\[LAST|\[NAME|%NAME%/i.test(both)) f.push('an unfilled placeholder is still in the body');
+  if (/\b(undefined|null|NaN|\[object Object\])\b/.test(both)) f.push('a broken value printed into the body');
+  if (/Hi Dr\. ,|Hi ,|Dear ,|Hi Dr\.,/.test(both)) f.push('the greeting has no name in it');
 
   return f;
 }

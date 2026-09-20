@@ -1288,7 +1288,10 @@ async function processImportJobs() {
       };
       const org = (ex.practice && ex.practice.name) || url.replace(/^https?:\/\//, '').split('/')[0];
       const sub = await sbPost('signup_submissions', {
-        type: 'provider', payload, org_name: org, submitter_email: '',
+        // lane stated outright rather than left to the column default. A website import is a
+        // med-legal network practice; PDRx pharmacy account intakes are a separate lane and must
+        // never surface in the med-legal review queue. Eric, 17 Sep 2026.
+        type: 'provider', lane: 'medlegal', payload, org_name: org, submitter_email: '',
         flagged_reason: 'Imported from website — verify details before approving',
       });
       // fetch the new submission id (sbPost returns minimal); look it up by org + recent

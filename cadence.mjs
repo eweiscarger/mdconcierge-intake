@@ -8,11 +8,19 @@
 //   - Suppressed and no-email leads are skipped. Warm-up ramp + per-practice pacing.
 // Env: SUPABASE_URL, SUPABASE_SERVICE_KEY.
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
-for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) { if (!v) { console.error('Missing env: ' + k); process.exit(1); } }
+// 17 Sep 2026: this exited the PROCESS at import time, so anything importing this file to check a
+// template died before rendering a line. The credentials are only needed by run(); the templates
+// and the composer are not. Checked at the top of run() instead, so importing is always safe.
+function requireEnv() {
+  for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
+    if (!v) { console.error('Missing env: ' + k); process.exit(1); }
+  }
+}
 
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { emailFaults, linkLabel } from './check.mjs';
+import { editorReview } from './editor.mjs';
 
 // A lead Eric answered by hand is his conversation for the next ten days. sent-scan.mjs stamps
 // manual_touch_at from his own Sent folder; the machine stays off the thread until it lapses.
@@ -111,10 +119,36 @@ let refused = 0;
 // passed, so `undefined` read as personal and the gate refused those emails for carrying the very
 // opt-out they are required to carry. Thirteen of thirteen were thrown out on 25 Aug 2026 for it.
 // Anything genuinely one to one must pass campaign:false rather than rely on the default.
+// 17 Sep 2026. Two gates now, both of which must pass before a row can exist.
+//
+//   1. emailFaults - the deterministic rules in check.mjs. Every one was written after a real
+//      failure, including the redundancy rules added the morning ten physicians got the opening
+//      line twice.
+//   2. editorReview - a managing editor reads the finished email and blocks anything redundant,
+//      contradictory, or that does not make sense. It fails CLOSED: no key, no network, a bad
+//      answer, and the email does not queue.
+//
+// Eric: "There has to be a proofreading agent or a managing editor that signs off on everything
+// before it goes out - it can't wait on my approval that's ridiculous - this can never happen
+// again." So nothing here waits on him. It either passes both gates or it is refused, loudly.
 async function queueEmail(row, campaign = true) {
+  const addressAs = row._addressAs || '';
   const f = emailFaults({ campaign, html: row.body_html, text: row.body_text, lastName: row._last, toEmail: row.to_email });
-  delete row._last;
+  delete row._last; delete row._addressAs;
   if (f.length) { refused++; console.error('  REFUSED ' + row.to_email + ': ' + f.join(', ')); return false; }
+
+  const ed = await editorReview({
+    subject: row.subject, text: row.body_text, html: row.body_html,
+    to: row.to_email, addressAs,
+  });
+  if (!ed.ok) {
+    refused++;
+    console.error('  EDITOR BLOCKED ' + row.to_email + ': ' + ed.reasons.join(' | '));
+    return false;
+  }
+
+  row.proofed = true;
+  row.proofed_at = new Date().toISOString();
   await sPost('mdrx_outbox', row);
   return true;
 }
@@ -198,14 +232,21 @@ const OVERVIEW = (t) =>
 // for word. Every touch has to make sense to a physician who never saw the one before it, so each
 // one says what the program is. Plain text, no links: the ask is a reply. Do not edit COLD_OPENER
 // or COLD_BODIES without Eric's approval of the exact wording.
+//
+// 17 Sep 2026: COLD_OPENER is prepended ONCE by touchBody (see below). It must NOT also appear at
+// the start of a COLD_BODIES string. It had been hard-coded into 2, 3 and 4 as well, so every one
+// of those touches went out with the line printed twice - 10 of them reached real physicians at
+// Rothman, OAA, Lancaster Ortho and TriRivers on the morning of 17 Sep before it was caught.
+// Bodies start at their own first sentence. Nothing else changed: the approved wording is intact.
 const COLD_OPENER = "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.";
 const COLD_BODIES = {
   "1": "If you ever prescribed meds for a work comp patient to a retail pharmacy that didn't get filled and caused a setback for the patient, it is not uncommon. 30% of work comp patients have difficulty getting their medication from this traditional method.\n\nA work comp mail order pharmacy can solve that. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR. And many physicians are not aware that in June, the PA Supreme Court ruled the anti-referral law does not apply to prescription drugs, so carriers cannot deny pharmacy payment on that basis (700 Pharmacy, 6/16/26).\n\nFor years, PBMs that have no involvement in patient care have generated the majority of revenue from prescriptions you write. The Work Comp Research Institute (WCRI) estimates prescription spend at $2,262 per work comp claim. You do all of the work, generate those scripts and never see any of that revenue. A mail order pharmacy program like ours gives you a compliant way to improve patient satisfaction and participate in the pharmacy revenue from scripts you already write. For those 2 reasons alone, wouldn't this be worth considering? Reply send and I will email you more about the PA Supreme Court Ruling and our program by MDRx.\n\nIf this is interesting and there's someone else within the practice I should talk to, I would appreciate the guidance.\n\nIf there is a better email to reach you on or if you would like to discuss in person, I would be happy to stop by the office with coffee.",
-  "2": "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.\n\nMany physicians are not aware that in June, the PA Supreme Court ruled the anti-referral law does not apply to prescription drugs, so carriers cannot deny pharmacy payment on that basis (700 Pharmacy, 6/16/26).\n\nThat matters for a work comp mail order pharmacy program like ours by MDRx. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR. And it gives you a compliant way to participate in the pharmacy revenue from scripts you already write, revenue that has gone to PBMs with no involvement in patient care.\n\nReply send and I will email you more about the ruling and our program.",
-  "3": "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.\n\nIf you have ever sent a work comp script to a retail pharmacy and it didn't get filled, it is not uncommon. 30% of work comp patients have difficulty getting their medication from retail, and it can cause a setback.\n\nA work comp mail order pharmacy solves that. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR.\n\nOur program by MDRx also gives you a compliant way to participate in the pharmacy revenue from scripts you already write.\n\nReply send and I will email you more about the program, or name a day and I will stop by the office with coffee.",
-  "4": "I don't love sending cold emails, but I truly believe it's worth 30 seconds of your time.\n\nFor years, PBMs that have no involvement in patient care have generated the majority of the revenue from prescriptions you write. WCRI estimates prescription spend at $2,262 per work comp claim. You do the work and never see any of it.\n\nOur work comp mail order pharmacy program by MDRx gives you a compliant way to participate in the pharmacy revenue from scripts you already write. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR.\n\nIf this is interesting and there's someone else within the practice I should talk to, I would appreciate the guidance. Or reply send and I will email you more about the program."
+  "2": "Many physicians are not aware that in June, the PA Supreme Court ruled the anti-referral law does not apply to prescription drugs, so carriers cannot deny pharmacy payment on that basis (700 Pharmacy, 6/16/26).\n\nThat matters for a work comp mail order pharmacy program like ours by MDRx. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR. And it gives you a compliant way to participate in the pharmacy revenue from scripts you already write, revenue that has gone to PBMs with no involvement in patient care.\n\nReply send and I will email you more about the ruling and our program.",
+  "3": "If you have ever sent a work comp script to a retail pharmacy and it didn't get filled, it is not uncommon. 30% of work comp patients have difficulty getting their medication from retail, and it can cause a setback.\n\nA work comp mail order pharmacy solves that. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR.\n\nOur program by MDRx also gives you a compliant way to participate in the pharmacy revenue from scripts you already write.\n\nReply send and I will email you more about the program, or name a day and I will stop by the office with coffee.",
+  "4": "For years, PBMs that have no involvement in patient care have generated the majority of the revenue from prescriptions you write. WCRI estimates prescription spend at $2,262 per work comp claim. You do the work and never see any of it.\n\nOur work comp mail order pharmacy program by MDRx gives you a compliant way to participate in the pharmacy revenue from scripts you already write. Patients receive their medication overnight at home, at no cost to them. All you or your staff do is change the pharmacy in the EHR.\n\nIf this is interesting and there's someone else within the practice I should talk to, I would appreciate the guidance. Or reply send and I will email you more about the program."
 };
-const COLD_OPTOUT = "If you are not interested or you do not treat work comp patients, simply let me know or reply stop and I will not contact you anymore.";
+// Eric's own wording, 17 Sep 2026. It sits below the signature as a footer, not in the letter.
+const COLD_OPTOUT = "If you don't see Workers' Comp or you're not interested, just reply not interested and you won't hear from me anymore.";
 
 
 // Eric, 15 Sep 2026: his mail to a partner landed in junk and the campaign shares his domain, so
@@ -216,15 +257,25 @@ const COLD_OPTOUT = "If you are not interested or you do not treat work comp pat
 const htmlLetter = (text) => {
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const paras = String(text).trim().split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  const quiet = /(?:are not|aren't) interested|reply stop/i;
-  const body = paras.map((p) => {
-    const style = quiet.test(p)
-      ? 'margin:0 0 12px;font-size:12px;line-height:1.5;color:#8a93a1;'
-      : 'margin:0 0 12px;';
-    return `<p style="${style}">${esc(p).replace(/\n/g, '<br>')}</p>`;
-  }).join('');
-  return '<!--signature-inline--><div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-    + `font-size:15px;line-height:1.55;color:#1a2233;max-width:640px;">${body}</div>`;
+  const quiet = /not interested|reply stop|no longer like to hear|unsubscribe\.html/i;
+  // The opt-out renders as a quiet footer UNDER the signature, not inline in the letter, matching
+  // what send-outreach's htmlPart does for every other email. Keeping the order of the letter and
+  // pulling the opt-out to the end means the plain text and the designed half read the same way.
+  // Eric, 17 Sep 2026: "There should be no html in the unsubscribe - it's plain text like
+  // everything else and they have to reply to be removed." So the opt-out is NOT a link, NOT grey,
+  // NOT small print. It is a sentence in the same type as the rest of the letter, sitting under
+  // the signature. There is no unsubscribe URL in cold mail at all: replying is the only way out,
+  // which is what the sentence asks for.
+  const letter = [];
+  const foot = [];
+  for (const p of paras) {
+    const html = `<p style="margin:0 0 12px;">${esc(p).replace(/\n/g, '<br>')}</p>`;
+    (quiet.test(p) ? foot : letter).push(html);
+  }
+  // Eric, 17 Sep 2026: all emails in Calibri. Fallbacks follow it for clients that do not have it.
+  return '<!--signature-inline--><div style="font-family:Calibri,Candara,Segoe UI,Helvetica,Arial,sans-serif;'
+    + `font-size:15px;line-height:1.55;color:#1a2233;max-width:640px;">${letter.join('')}`
+    + `${foot.length ? `<div style="margin-top:16px;">${foot.join('')}</div>` : ''}</div>`;
 };
 
 function touchBody(touch, p, hook) {
@@ -233,11 +284,13 @@ function touchBody(touch, p, hook) {
   const lead = (hook || '').trim() ? `${String(hook).trim()}\n\n` : '';
   const sig = '\n\nBest,\n\nEric Weiscarger\nFounder, MDconcierge\nReferral management, work comp pharmacy, ancillary coordination\n(570) 817-7569\neric@mdconcierge.net\nmdconcierge.net';
   const body = COLD_BODIES[touch] || COLD_BODIES[4];
-  // The opt-out sits just above "Best,". send-outreach cuts everything from the sign-off down when
-  // it builds the HTML half and only rescues a line carrying an unsubscribe link, so a reply-stop
-  // line under the signature vanished from the HTML and the wire held the email for having no
-  // opt-out. Above the sign-off it survives, and the sender moves it under the signature itself.
-  return `${to}\n\n${COLD_OPENER}\n\n${lead}${body}\n\n${COLD_OPTOUT}` + sig;
+  // Eric, 17 Sep 2026: the opt-out goes BELOW the signature, where a footer belongs. It had been
+  // sitting above "Best," which made it read as the last line of his letter.
+  // Safe to move: htmlLetter below lifts any opt-out paragraph out and re-attaches it under the
+  // signature, so both halves agree. The older warning here was about send-outreach's textToHtml
+  // path, which finds the opt-out only by an unsubscribe LINK and would strand a plain sentence -
+  // the cold touches never take that path, because this file builds their HTML itself.
+  return `${to}\n\n${COLD_OPENER}\n\n${lead}${body}` + sig + `\n\n${COLD_OPTOUT}`;
 }
 
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
@@ -250,6 +303,7 @@ const SUBJECTS = {
 };
 
 async function run() {
+  requireEnv();
   const cfg = (await sGet('outreach_config?id=eq.1'))[0] || {};
   if (!cfg.warmup_started_at) await sPatch('outreach_config?id=eq.1', { warmup_started_at: today() });
   // Batch size: explicit BATCH_SIZE override (manual first batch), else the daily cap. Eric self-throttles by approving fewer.
@@ -459,4 +513,17 @@ async function run() {
   const daysIn = cfg.warmup_started_at ? Math.floor((Date.now() - new Date(cfg.warmup_started_at).getTime()) / 86400000) + 1 : 1;
   console.log(`queue builder ${today()}: warmup day ${daysIn} cap ${cap}, queued ${queuedCount} cold and ${dripCount} drip(s) for approval, refused ${refused}. Recycled ${rec.length}.`);
 }
-run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
+// 17 Sep 2026: this file used to run the moment it was imported, so anything that wanted to check
+// a template - a verification script, a test, the proofreader - would have BUILT AND QUEUED the
+// day's mail as a side effect. Now it only runs when it is the program being executed. Importing
+// it is safe and does nothing.
+export { touchBody, htmlLetter, COLD_OPENER, COLD_OPTOUT, COLD_BODIES, SUBJECTS };
+
+const isMain = (() => {
+  try { return process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href; }
+  catch { return false; }
+})();
+
+if (isMain) {
+  run().catch((e) => { console.error('Fatal: ' + (e?.stack || e)); process.exit(1); });
+}
