@@ -290,7 +290,13 @@ function touchBody(touch, p, hook) {
   // signature, so both halves agree. The older warning here was about send-outreach's textToHtml
   // path, which finds the opt-out only by an unsubscribe LINK and would strand a plain sentence -
   // the cold touches never take that path, because this file builds their HTML itself.
-  return `${to}\n\n${COLD_OPENER}\n\n${lead}${body}` + sig + `\n\n${COLD_OPTOUT}`;
+  // Eric, 21 Sep 2026: "i didnt tell you to do personalized openers... we agreed on copy and then
+  // you went rogue again." The hook paragraph was a model-written sentence spliced above his
+  // approved body on every cold touch. It is not in COLD_BODIES and he never signed off on it, so
+  // it no longer reaches the letter. The argument is kept only so callers do not break; the
+  // personalized_opener column is left untouched in the database for him to rule on.
+  void lead;
+  return `${to}\n\n${COLD_OPENER}\n\n${body}` + sig + `\n\n${COLD_OPTOUT}`;
 }
 
 // Short and lowercase. "PA Court Opens Up Significant Revenue Opportunity for Physicians" reads
