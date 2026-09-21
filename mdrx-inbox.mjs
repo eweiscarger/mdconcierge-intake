@@ -407,6 +407,19 @@ async function main() {
         provider_id: prov ? prov.id : null, matched_by: hit.how,
       });
 
+      // ...and it becomes a timeline event, which it never did. The reply was being stored here
+      // and logged nowhere, so mdrx_activity held 642 email_out rows against a single email_in:
+      // Eric's half of every conversation appeared on the profile and the physician's half did
+      // not. Gated on prov because an activity row without a lead has nothing to attach to.
+      if (prov) {
+        await sPost('mdrx_activity', {
+          provider_id: prov.id, type: 'email_in', created_by: 'inbox agent', ext_id: String(mid),
+          occurred_at: env.date || new Date().toISOString(),
+          subject: subject || '(no subject)',
+          notes: `Replied ${hit.how}. ${String(bodyText || '').replace(/\s+/g, ' ').trim().slice(0, 400)}`,
+        });
+      }
+
       // The reply also becomes a next move on his record, so it is waiting in the profile where Eric
       // actually works rather than only in the replies list. A drafted answer nobody sees is the
       // same as no answer, and Amanda Dowdy waited four days inside a system that had every part
