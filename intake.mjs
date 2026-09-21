@@ -201,6 +201,10 @@ function buildLead(d, fromAddr, subject) {
     date_first_treatment: d.date_first_treatment || null,
     adjuster_name: d.adjuster_name || null,
     adjuster_phone: d.adjuster_phone || null,
+    // 21 Sep 2026: the prompt asks for carrier and the summary email prints it, but it was never
+    // mapped to the column, so every case landed with carrier NULL while the name sat in the
+    // notes blob. Caught on the first live test: "Carrier: Zurich" parsed, column empty.
+    carrier: d.carrier || null,
     panel_posted: d.panel_posted || null,
     representation_status: 'represented',
     billing_pathway: deriveBillingPathway({ claim_status: d.claim_status }),
