@@ -408,6 +408,16 @@ async function sendReply(to, origSubject, text, html, inReplyTo) {
 async function sendMail(to, subject, text, html) {
   await transporter.sendMail({ from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`, replyTo: `MDconcierge <${ZOHO_USER}>`, to, subject, text: text + signatureText(), html, headers: { 'X-MDC-Auto': 'notify' } });
 }
+// Eric, 21 Sep 2026: the live test was sent FROM eric@ TO referrals@, so the acknowledgment
+// replied to Eric — "this has to stay in the referrals@ box and not come into eric@ or i'll drown."
+// The case routing was already right; what was wrong is that the engine will acknowledge its own
+// addresses. Never ack or invite ourselves: it clutters the inbox and, if anything ever forwards
+// into referrals@, two automated mailboxes can answer each other forever.
+const OWN_ADDRESSES = new Set(['eric@mdconcierge.net', 'referrals@mdconcierge.net']);
+function isOwnAddress(a) {
+  const e = String(a || '').toLowerCase().trim();
+  return OWN_ADDRESSES.has(e) || e === String(ZOHO_USER || '').toLowerCase();
+}
 
 // ── #3 Notify provider contacts when a lead is routed (uses service key; runs each cycle) ──
 const SVC = process.env.SUPABASE_SERVICE_KEY;
@@ -1542,7 +1552,7 @@ async function scanEricInbox() {
         console.log(`[eric@] caught a referral sent to eric@ -> ${payload.case_id}`);
         { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
           await pushNotify('New referral (sent to eric@)', `${pn} (${payload.case_id})`); }
-        if (fromAddr) {
+        if (fromAddr && !isOwnAddress(fromAddr)) {
           try {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
@@ -1823,7 +1833,7 @@ async function main() {
         { const pn = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
           await pushNotify('New referral', `${pn} — ${(payload.case_type || 'new case').toUpperCase()} (${payload.case_id})`); }
         // gracious auto-acknowledgment back to the referrer
-        if (fromAddr) {
+        if (fromAddr && !isOwnAddress(fromAddr)) {
           try {
             const replyText = await draftReply(extracted, payload, fromAddr);
             const pName = [payload.patient_first, payload.patient_last].filter(Boolean).join(' ') || payload.case_id;
