@@ -1201,7 +1201,10 @@ async function forwardAcceptedDocs() {
   if (!SVC) return;
   let cases = [];
   try {
-    cases = await sbGet(`cases?select=*&provider_response=eq.accepted&docs_forwarded=is.false&source_msgid=not.is.null`);
+    // No source_msgid filter: the search falls back to the case reference and the patient name, so
+    // cases created before the Message-ID was captured are still reachable. Filtering on it here
+    // would have made those fallbacks dead code.
+    cases = await sbGet(`cases?select=*&provider_response=eq.accepted&docs_forwarded=is.false`);
   } catch (e) { console.error('doc relay: query failed: ' + e.message); return; }
   if (!cases.length) return;
   console.log(`Document relay: ${cases.length} accepted case(s) with a source message.`);
@@ -1279,7 +1282,22 @@ async function forwardAcceptedDocs() {
         }));
         const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
         const fileList = docs.map(a => a.filename || 'document').join(', ');
-        const note = `Hello,\n\nAttached are the document(s) the referring office sent with ${patient} (${cs.case_id}): ${fileList}.\n\nThese come straight from the referral email. MDconcierge acts only as a coordination conduit and does not retain a copy. If anything is missing, or you need imaging or imaging reports, reply here and we will request it from the attorney's office for you.`;
+        // Eric, 21 Sep 2026: "sometimes its attached in the referral so that has to get sent to the
+        // provider as well all in the one email." The NCP usually rides on the referral, and the
+        // claim detail used to arrive as its own separate message minutes later. One email now
+        // carries both: the attachments AND everything the office needs to bill and authorise.
+        const claimLines = [
+          cs.claim_number ? `Claim #: ${cs.claim_number}` : '',
+          cs.claim_status ? `Claim status: ${cs.claim_status}` : '',
+          cs.date_of_injury ? `Date of injury: ${cs.date_of_injury}` : '',
+          cs.carrier ? `Carrier: ${cs.carrier}` : '',
+          (cs.adjuster_name || cs.adjuster_phone) ? `Adjuster: ${[cs.adjuster_name, cs.adjuster_phone].filter(Boolean).join(' · ')}` : '',
+          cs.adjuster_email ? `Adjuster email: ${cs.adjuster_email}` : '',
+          cs.panel_posted ? `Panel posted: ${cs.panel_posted}` : '',
+        ].filter(Boolean).join('\n');
+        const note = `Hello,\n\nAttached are the document(s) the referring office sent with ${patient} (${cs.case_id}): ${fileList}.`
+          + (claimLines ? `\n\nAnd here is what you'll need for billing and authorization:\n\n${claimLines}` : '')
+          + `\n\nThese come straight from the referral email. MDconcierge acts only as a coordination conduit and does not retain a copy. If anything is missing, or you need imaging or imaging reports, reply here and we will request it from the attorney's office for you.`;
         await transporter.sendMail({
           from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`,
           replyTo: `MDconcierge <${ZOHO_USER}>`,
@@ -1291,7 +1309,13 @@ async function forwardAcceptedDocs() {
           headers: { 'X-MDC-Auto': 'forward' },
         });
         await logAudit(cs.id, 'referral_docs_relayed', `${docs.length} file(s) to provider: ${fileList}`);
-        await done(`relayed ${docs.length} file(s) to the office`);
+        // The claim detail went out in the email above, so the separate claim-details job further
+        // down this cycle must not send a second one for this case.
+        if (claimLines) {
+          await sbPatch(`cases?id=eq.${cs.id}`, { claim_info_forwarded: true });
+          await logAudit(cs.id, 'claim_info_forwarded', cs.claim_number || null);
+        }
+        await done(`relayed ${docs.length} file(s) + claim detail to the office in one email`);
       } catch (e) {
         console.error(`  doc relay failed for ${cs.case_id}: ${e.message}`);   // left unflagged: retried next cycle
       }
