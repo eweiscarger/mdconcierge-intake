@@ -1222,7 +1222,11 @@ async function forwardAcceptedDocs() {
         const provEmails = await resolveOwnerEmails(cs, 'provider');
         if (!provEmails.length) { await done('accepted but no provider referral email on file — nothing relayed'); continue; }
 
-        // Find that one message again. Search INBOX, then Junk, by Message-ID header.
+        // Find that message again. Eric, 21 Sep 2026: "i want to be able to fetch it - so dont make
+        // it a one and done." So this does not depend on a stored Message-ID: it tries that first,
+        // then falls back to the case reference, then the patient's name. Cases created before the
+        // Message-ID was captured are still reachable, and a resend is just a matter of clearing
+        // docs_forwarded.
         let source = null;
         const boxes = ['INBOX'];
         try {
@@ -1230,20 +1234,39 @@ async function forwardAcceptedDocs() {
           const junk = all.find(b => b.specialUse === '\\Junk') || all.find(b => /^(spam|junk)/i.test(b.path || ''));
           if (junk && junk.path && junk.path.toUpperCase() !== 'INBOX') boxes.push(junk.path);
         } catch (e) { /* INBOX only */ }
+
+        // Only a real RFC header is usable as a Message-ID search; a bare numeric id is a mail
+        // client's internal handle and will never match.
+        const hdrId = /^<.+>$/.test(String(cs.source_msgid || '').trim()) ? String(cs.source_msgid).trim() : null;
+        const patientName = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ');
+        const queries = [];
+        if (hdrId) queries.push({ header: { 'message-id': hdrId } });
+        if (cs.case_id) queries.push({ body: cs.case_id });
+        if (patientName) queries.push({ subject: patientName });
+
         for (const box of boxes) {
           if (source) break;
           let lock;
           try { lock = await client.getMailboxLock(box); } catch (e) { continue; }
           try {
-            const uids = await client.search({ header: { 'message-id': cs.source_msgid } }, { uid: true });
-            if (uids && uids.length) {
-              const m = await client.fetchOne(uids[uids.length - 1], { source: true }, { uid: true });
-              if (m && m.source) source = m.source;
+            for (const q of queries) {
+              if (source) break;
+              let uids = [];
+              try { uids = await client.search(q, { uid: true }); } catch (e) { continue; }
+              if (!uids || !uids.length) continue;
+              // newest match wins, and it must actually carry a file
+              for (const uid of uids.slice(-4).reverse()) {
+                const m = await client.fetchOne(uid, { source: true }, { uid: true });
+                if (!m || !m.source) continue;
+                const p = await simpleParser(m.source);
+                const has = (p.attachments || []).some(a => a && a.content && (a.filename || (a.size || 0) > 2048));
+                if (has) { source = m.source; break; }
+              }
             }
           } catch (e) { /* try the next mailbox */ }
           finally { try { lock.release(); } catch (_) {} }
         }
-        if (!source) { await done('source email not found in the mailbox — nothing to relay'); continue; }
+        if (!source) { await done('no source email with attachments found — nothing to relay'); continue; }
 
         const parsed = await simpleParser(source);
         const docs = (parsed.attachments || []).filter(a => a && a.content && (a.filename || (a.size || 0) > 2048));
