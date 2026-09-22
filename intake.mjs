@@ -258,11 +258,52 @@ async function _recentSendCount(addr, sinceIso) {
   } catch (e) { return -1; }   // -1 = unknown; callers treat unknown as "allow"
 }
 
+// ── Courtesy gate ──────────────────────────────────────────────────────────────────────────────
+// Eric, 21 Sep 2026: Bresnahan's office got SEVEN emails in eighty minutes on one referral, from
+// five jobs that each thought they were sending one. "all jobs have to be aware of one annother."
+// Then: "why would you need to send 4 emails a day unless something was requested by a party or
+// information was sent or updated?" - which is the right test, so there is no daily allowance here.
+//
+// Every automated send declares why it exists:
+//   'event'  something actually happened for this recipient - a new referral, a document, a reply,
+//            a request from the other party, information that arrived. These go.
+//   'nudge'  a reminder, chase, digest or invitation nobody asked for. These wait a long time and
+//            never stack: if this address heard from us recently, the nudge is DEFERRED.
+//
+// Deferred means deferred. The gate THROWS, so the calling job's own try/catch skips its
+// "notified = true" patch and the work is picked up again next cycle. The old cap returned
+// {blocked:true}, which nothing checked, so a suppressed email was silently lost instead of
+// delayed - the one failure mode worse than sending too much.
+const NUDGE_QUIET_MIN = 240;        // a nudge waits 4h after anything else we sent that address
+const EVENT_SPACING_MIN = 8;        // two real events in the same few minutes go out as they are,
+                                    // but a burst from separate jobs is spaced so it reads as a
+                                    // conversation rather than a mailshot
+class MailDeferred extends Error {
+  constructor(addr, why) { super(`deferred to ${addr}: ${why}`); this.deferred = true; }
+}
+
 const transporter = {
   async sendMail(msg) {
     const recipients = String(msg.to || '')
       .split(/[,;]/).map((s) => (s.match(/<([^>]+)>/) || [null, s])[1].trim().toLowerCase())
       .filter((a) => a && /@/.test(a));
+
+    // kind: 'event' (default) or 'nudge'. critical bypasses the gate entirely - a first referral
+    // notice, a document relay, a direct reply to a human, or an alert to Eric must never wait.
+    const kind = msg.mdcKind || 'event';
+    const critical = !!msg.mdcCritical;
+    if (!critical && SVC) {
+      for (const addr of recipients) {
+        const quietMin = kind === 'nudge' ? NUDGE_QUIET_MIN : EVENT_SPACING_MIN;
+        const sinceIso = new Date(Date.now() - quietMin * 60000).toISOString();
+        const recent = await _recentSendCount(addr, sinceIso);
+        if (recent > 0) {
+          const why = `${kind}, ${recent} email(s) in the last ${quietMin}m`;
+          console.log(`  HOLD ${addr}: ${why} — will go next cycle`);
+          throw new MailDeferred(addr, why);
+        }
+      }
+    }
 
     for (const addr of recipients) {
       const hourAgo = new Date(Date.now() - 3600000).toISOString();
@@ -405,8 +446,13 @@ async function sendReply(to, origSubject, text, html, inReplyTo) {
     headers: Object.assign({ 'X-MDC-Auto': 'ack' }, inReplyTo ? { 'In-Reply-To': inReplyTo, 'References': inReplyTo } : {}),
   });
 }
-async function sendMail(to, subject, text, html) {
-  await transporter.sendMail({ from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`, replyTo: `MDconcierge <${ZOHO_USER}>`, to, subject, text: text + signatureText(), html, headers: { 'X-MDC-Auto': 'notify' } });
+// opts: { kind: 'event'|'nudge', critical: true }  — see the courtesy gate above.
+async function sendMail(to, subject, text, html, opts = {}) {
+  await transporter.sendMail({
+    from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`, replyTo: `MDconcierge <${ZOHO_USER}>`,
+    to, subject, text: text + signatureText(), html, headers: { 'X-MDC-Auto': 'notify' },
+    mdcKind: opts.kind || 'event', mdcCritical: !!opts.critical,
+  });
 }
 // Eric, 21 Sep 2026: the live test was sent FROM eric@ TO referrals@, so the acknowledgment
 // replied to Eric — "this has to stay in the referrals@ box and not come into eric@ or i'll drown."
@@ -636,11 +682,18 @@ async function notifyRoutedProviders() {
         statusBtn(stok),
         mailtoBtn('Reply to coordinate', `RE ${cs.case_id}`, `Hello, regarding referral ${cs.case_id}:\n\n`),
       ];
+      // Portal setup rides along in this email rather than arriving as a second one seconds later.
+      const portalLink = await ensurePortalLink('provider', provId, recipients[0].email, recipients[0].name, prov.practice_id);
+      if (portalLink) btns.push({ label: '🔐 Set up portal access', href: portalLink, color: '#EEF4FC', text: '#14213D' });
       const subj = `New patient referral — ${cs.case_type || 'case'}${location ? (' · ' + location) : ''} (${cs.case_id})`;
-      await sendMail(to, subj, text, emailHtml(text, btns, caseFooter(cs.case_id)));
+      // A new referral is the definition of an event, and it is the first thing this office hears
+      // from us on this case: never held behind the courtesy gate.
+      await sendMail(to, subj, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'event', critical: true });
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
       await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
-      for (const rc of recipients) await sendPortalInvite('provider', provId, rc.email, rc.name, prov.practice_id); // first-time only; dedupes; practice-scoped
+      // Accounts for the other referral contacts are created quietly here; the setup button is in
+      // the email above, and every email footer carries a portal link. No separate invitation.
+      for (const rc of recipients.slice(1)) await ensurePortalLink('provider', provId, rc.email, rc.name, prov.practice_id);
       console.log(`  notified provider ${provId}, ${recipients.length} recipient(s) (case ${cs.case_id})`);
     } catch (e) { console.error(`  notify case ${cs.id} failed: ${e.message}`); }
   }
@@ -681,7 +734,7 @@ async function followUpRouted() {
           btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#EEF4FC', text: '#14213D' });
         }
         btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
-        await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
+        await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'nudge' });
       }
 
       if (count >= 3) {
@@ -764,7 +817,7 @@ async function forwardCompletedInfo() {
         cs.panel_posted ? `Panel posted: ${cs.panel_posted}` : '',
       ].filter(Boolean).join('\n');
       const text = `Hello,\n\nGood news — we've received the insurance/claim details for referral ${cs.case_id} from the attorney's office. Here's what you'll need for billing and authorization:\n\n${lines}\n\nPlease reply if anything else would help. Thank you for taking great care of this patient.`;
-      await sendMail(emails.join(', '), `Claim details — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)], caseFooter(cs.case_id)));
+      await sendMail(emails.join(', '), `Claim details — ${cs.case_id}`, text, emailHtml(text, [mailtoBtn('Reply', `RE ${cs.case_id}`, `Hello,\n\nRegarding ${cs.case_id}:\n\n`)], caseFooter(cs.case_id)), { kind: 'event', critical: true });
       await sbPatch(`cases?id=eq.${cs.id}`, { claim_info_forwarded: true });
       await logAudit(cs.id, 'claim_info_forwarded', cs.claim_number || null);
       sent++;
@@ -867,7 +920,7 @@ async function chaseGaps() {
       const btns = [mailtoBtn('Reply with the details', subj, 'Hello,\n\n')];
       const singleCs = nCases === 1 ? grp.items[0].cs : null;   // for one-case digests, let them self-serve the form
       if (singleCs && singleCs.status_token) btns.unshift({ label: '✏️ Add the info yourself', href: 'https://mdconcierge.net/status.html?t=' + singleCs.status_token, color: '#08214C', text: '#ffffff' });
-      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, btns, portalLinkHtml()));
+      await sendMail(grp.emails.join(', '), subj, text, emailHtml(text, btns, portalLinkHtml()), { kind: 'nudge' });
       for (const it of grp.items) await sbPatch(`case_gaps?id=eq.${it.g.id}`, { touches: (it.g.touches || 0) + 1, next_touch: hoursFromNow(CHASE_INTERVAL_H), updated_at: new Date().toISOString() });
       sent++;
     } catch (e) { console.error('  chase send failed: ' + e.message); }
@@ -896,7 +949,7 @@ async function relayTreatingProvider() {
       if (emails.length) {
         const stok = await statusToken(cs);
         const text = `Hello,\n\nUpdate on referral ${cs.case_id}: ${patient} will be treated by ${provName}. We'll keep coordinating and relay the appointment once it's scheduled.`;
-        await sendMail(emails.join(', '), `Treating provider assigned — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)));
+        await sendMail(emails.join(', '), `Treating provider assigned — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(stok)], caseFooter(cs.case_id)), { kind: 'event', critical: true });
       }
       await sbPatch(`cases?id=eq.${cs.id}`, { treating_relayed: true });
       await logAudit(cs.id, 'treating_provider_relayed', provName);
@@ -921,7 +974,7 @@ async function relayAppointments() {
       if (cs.routed_provider_id) { try { provName = ((await sbGet(`providers?select=doctor_name&id=eq.${cs.routed_provider_id}`))[0] || {}).doctor_name || ''; } catch (e) {} }
       const text = `Hello,\n\nGood news — your client ${patient} (reference ${cs.case_id}) has been scheduled${cs.appointment_at ? (' for ' + cs.appointment_at) : ''}${provName ? (' with ' + provName) : ''}. We'll keep you posted as things progress, and please let us know if there's anything you need from the provider.`;
       const rStok = await statusToken(cs);
-      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], caseFooter(cs.case_id)));
+      await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], caseFooter(cs.case_id)), { kind: 'event', critical: true });
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
       await logAudit(cs.id, 'appointment_relayed', cs.appointment_at || null);
       sent++;
@@ -952,7 +1005,7 @@ async function escalateUnreachable() {
       }
       const why = cs.schedule_status === 'unable' ? `${office} has been unable to reach your client to schedule` : `${office} is trying to reach your client to schedule but hasn't connected yet`;
       const text = `Hello,\n\nA quick heads-up on referral ${cs.case_id}: ${why} (${patient}). Could you please ask ${patient} to call the office, or reply with the best phone number and time to reach them? We'd like to get this scheduled and keep the treatment moving.`;
-      await sendMail(emails.join(', '), `Action needed — can't reach your client to schedule (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply with the best number', `RE ${cs.case_id} — scheduling`, `Hello,\n\nBest way to reach ${patient}:\n\n`)], caseFooter(cs.case_id)));
+      await sendMail(emails.join(', '), `Action needed — can't reach your client to schedule (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply with the best number', `RE ${cs.case_id} — scheduling`, `Hello,\n\nBest way to reach ${patient}:\n\n`)], caseFooter(cs.case_id)), { kind: 'nudge' });
       await sbPatch(`cases?id=eq.${cs.id}`, { unreachable_relayed: true, status: 'escalated' });
       await logAudit(cs.id, 'unreachable_escalated', cs.schedule_status);
       sent++;
@@ -1051,7 +1104,7 @@ async function notifyCaseRequests() {
         btns.push({ label: '📋 Open case & respond', href: 'https://mdconcierge.net/respond.html?t=' + cs.accept_token, color: '#08214C', text: '#ffffff' });
       }
       btns.push(mailtoBtn('Reply by email', `RE request — ${cs.case_id}`, `Hello,\n\nRegarding the request on ${cs.case_id}:\n\n`));
-      await sendMail(emails.join(', '), `A request on your referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)));
+      await sendMail(emails.join(', '), `A request on your referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'event', critical: true });
       await sbPatch(`case_requests?id=eq.${rq.id}`, { notified_at: new Date().toISOString() });
       await logAudit(cs.id, 'request_notified', `${rq.request_type} → ${toOwner}`);
       sent++;
@@ -1095,7 +1148,7 @@ async function relayMessageReply(cs, fromAddr, body) {
   if (!reply) { console.log(`  reply on ${cs.case_id}: empty after stripping quotes`); return; }
   const label = fromRole === 'provider' ? "the patient's provider" : fromRole === 'attorney' ? "the referring attorney's office" : 'the other party';
   const text = `A message regarding case ${cs.case_id}, relayed through MDconcierge:\n\n${reply}`;
-  await sendMail(toEmails.join(', '), `[${cs.case_id}] Message from ${label}`, text, emailHtml(text, [], caseFooter(cs.case_id)));
+  await sendMail(toEmails.join(', '), `[${cs.case_id}] Message from ${label}`, text, emailHtml(text, [], caseFooter(cs.case_id)), { kind: 'event', critical: true });
   await logAudit(cs.id, `message_${fromRole}_to_${toRole}`, 'reply relayed');
   console.log(`  relayed message reply on ${cs.case_id} (${fromRole} -> ${toRole})`);
 }
@@ -1492,6 +1545,17 @@ async function ensurePortalAccount(role, recordId, email, name, practiceId) {
   try { await sbPost('audit_log', { case_id: null, action: 'portal_account_created', detail: `${role} ${em}${hold ? ' (held: free domain)' : ''}`, source: 'automation' }); } catch (e) {}
   return hold ? { held: true, email: em } : { held: false, email: em, link: `https://mdconcierge.net/portal.html?setup=${setup}` };
 }
+// Eric, 21 Sep 2026: "portal invite should be included when they refer and we respond and we send -
+// its in the initial email". It used to be its own email three seconds behind the referral notice,
+// for a login nobody had asked for. Pass { send:false } to create the account and hand back the
+// setup link so the caller can put a button in the email it was already sending.
+async function ensurePortalLink(role, recordId, email, name, practiceId) {
+  try {
+    const r = await ensurePortalAccount(role, recordId, email, name, practiceId);
+    if (!r || r.held || !r.link) return null;
+    return r.link;
+  } catch (e) { return null; }
+}
 async function sendPortalInvite(role, recordId, email, name, practiceId) {
   const r = await ensurePortalAccount(role, recordId, email, name, practiceId);
   if (!r) return;                       // existing account → nothing to do
@@ -1570,6 +1634,12 @@ async function sendAttorneyDigests() {
     try { emails = await resolveOwnerEmails(cs, 'attorney'); } catch (e) {}
     for (const e of emails) { if (/@mdconcierge\.net$/i.test(e)) continue; (byAtty[e] = byAtty[e] || []).push(cs); }
   }
+  // Eric, 21 Sep 2026: "weekly digest should literally go once a week on friday AM only."
+  // It used to go whenever the weekly tag happened to be unused, which is how Bresnahan got one at
+  // 18:15 on a Monday, eighty minutes after three other emails.
+  const now0 = new Date();
+  const isFridayAm = now0.getDay() === 5 && now0.getHours() >= 7 && now0.getHours() < 12;
+  if (!isFridayAm) return;
   const week = Math.floor(Date.now() / (7 * 86400000));
   const statusMap = {
     new: "Received — we're getting it routed", review: 'In review', routed: 'Sent to the provider — awaiting scheduling',
@@ -1589,7 +1659,7 @@ async function sendAttorneyDigests() {
     const text = `Hello,\n\nHere's where your active cases stand this week — ${list.length} in progress:\n\n${lines}\n\nWe're staying on top of each one. Just reply if you need anything, or want us to push something forward.`;
     try {
       await sendMail(email, `Your MDconcierge case update — ${list.length} active case${list.length === 1 ? '' : 's'}`, text,
-        emailHtml(text, [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#08214C', text: '#ffffff' }], portalLinkHtml()));
+        emailHtml(text, [{ label: '📋 Open my portal', href: 'https://mdconcierge.net/portal.html', color: '#08214C', text: '#ffffff' }], portalLinkHtml()), { kind: 'nudge' });
       await sbPost('audit_log', { case_id: null, action: 'attorney_digest', detail: tag, source: 'automation' });
       sent++;
       console.log(`  weekly digest sent (${list.length} case(s)).`);
@@ -1654,9 +1724,10 @@ async function scanEricInbox() {
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
             if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#08214C', text: '#ffffff' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
-            const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
-            await sendReply(fromAddr, subject, replyText, ackHtml, envelope.messageId);  // reply goes FROM referrals@ → migrates them there
-            await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact);
+            // Portal setup rides in this acknowledgment rather than arriving as a second email.
+            const pLink = await ensurePortalLink('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact);
+            if (pLink) ackBtns.push({ label: '🔐 Set up portal access', href: pLink, color: '#EEF4FC', text: '#14213D' });
+            await sendReply(fromAddr, subject, replyText, emailHtml(replyText, ackBtns, caseFooter(payload.case_id)), envelope.messageId);  // reply goes FROM referrals@ → migrates them there
           } catch (e) { console.error(`  [eric@] ↳ reply failed: ${e.message}`); }
         }
       } catch (e) { console.error(`[eric@] error on uid ${uid}: ${e.message}`); }
@@ -1938,10 +2009,14 @@ async function main() {
             const ackBtns = [mailtoBtn('Reply to coordinate', `Re: referral — ${pName} (${payload.case_id})`, `Hello,\n\nRegarding ${pName} (${payload.case_id}):\n\n`)];
             if (payload.status_token) ackBtns.unshift({ label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + payload.status_token, color: '#08214C', text: '#ffffff' });
             if (payload.status_token) ackBtns.unshift(statusBtn(payload.status_token));
-            const ackHtml = emailHtml(replyText, ackBtns, caseFooter(payload.case_id));
-            await sendReply(fromAddr, subject, replyText, ackHtml, msg.envelope?.messageId);
+            // Eric, 21 Sep 2026: "do not send a separate portal invite - thats overkill." The link
+            // has to be fetched BEFORE the html is built, or the account is created and the button
+            // never reaches anyone. This is the main referral path, so getting the order wrong here
+            // means attorneys get no portal link at all.
+            const pLink = await ensurePortalLink('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact);
+            if (pLink) ackBtns.push({ label: '🔐 Set up portal access', href: pLink, color: '#EEF4FC', text: '#14213D' });
+            await sendReply(fromAddr, subject, replyText, emailHtml(replyText, ackBtns, caseFooter(payload.case_id)), msg.envelope?.messageId);
             console.log(`  ↳ acknowledged the referrer (${payload.case_id})`);
-            await sendPortalInvite('attorney', payload.attorney_id || null, fromAddr, extracted && extracted.referring_contact); // first-time only; free domains held
           } catch (e) { console.error(`  ↳ reply failed: ${e.message}`); }
         }
         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
