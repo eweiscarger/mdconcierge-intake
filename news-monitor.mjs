@@ -106,6 +106,9 @@ async function main() {
       headline: (it.headline || '').slice(0, 200) || null,
       draft_hook: String(it.draft_hook).slice(0, 4000),
       angle: (it.angle || '').slice(0, 400) || null,
+      // Eric, 21 Sep 2026: "i also want to access those stories and also just have key points".
+      // Three factual lines so a story can be judged in the cockpit without opening the article.
+      key_points: (it.key_points || '').slice(0, 2000) || null,
       status: 'pending',
       run_tag: today,
     });
