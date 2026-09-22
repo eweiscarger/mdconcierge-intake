@@ -1131,6 +1131,100 @@ async function forwardDocuments(cs, fromAddr, subject, bodyText, docs) {
   return { forwarded: true, role: recipientRole };
 }
 
+// ── Relay the referral's own attachments to the office, on acceptance ──────────────────────────
+// Eric, 21 Sep 2026: "i thought our system could forward the attached documents without storing
+// them? jenna sent a file, so we would have to pull it out and send it". She had. The reply path
+// (forwardDocuments) already relayed attachments on a KNOWN case, but the branch that CREATES a
+// case from a fresh referral never passed them on, so the first real referral's file was parsed
+// and dropped.
+//
+// This closes that gap the same way the rest of the platform works: nothing is stored. At forward
+// time we reopen the mailbox, pull that one message back by its Message-ID, take the attachments
+// into memory, send them, and let them go. No Supabase row, no bucket, no repo.
+//
+// It fires on ACCEPTANCE, not on routing: before a practice accepts they are deliberately not told
+// the patient's name, so records must not reach them either.
+async function forwardAcceptedDocs() {
+  if (!SVC) return;
+  let cases = [];
+  try {
+    cases = await sbGet(`cases?select=*&provider_response=eq.accepted&docs_forwarded=is.false&source_msgid=not.is.null`);
+  } catch (e) { console.error('doc relay: query failed: ' + e.message); return; }
+  if (!cases.length) return;
+  console.log(`Document relay: ${cases.length} accepted case(s) with a source message.`);
+
+  let client = null;
+  try {
+    client = new ImapFlow({ host: 'imap.zoho.com', port: 993, secure: true, auth: { user: ZOHO_USER, pass: ZOHO_APP_PASSWORD }, logger: false });
+    await client.connect();
+  } catch (e) { console.error('doc relay: IMAP connect failed: ' + e.message); return; }
+
+  try {
+    for (const cs of cases) {
+      const done = async (note) => {
+        await sbPatch(`cases?id=eq.${cs.id}`, { docs_forwarded: true, docs_forwarded_at: new Date().toISOString() });
+        if (note) console.log(`  ${cs.case_id}: ${note}`);
+      };
+      try {
+        const provEmails = await resolveOwnerEmails(cs, 'provider');
+        if (!provEmails.length) { await done('accepted but no provider referral email on file — nothing relayed'); continue; }
+
+        // Find that one message again. Search INBOX, then Junk, by Message-ID header.
+        let source = null;
+        const boxes = ['INBOX'];
+        try {
+          const all = await client.list();
+          const junk = all.find(b => b.specialUse === '\\Junk') || all.find(b => /^(spam|junk)/i.test(b.path || ''));
+          if (junk && junk.path && junk.path.toUpperCase() !== 'INBOX') boxes.push(junk.path);
+        } catch (e) { /* INBOX only */ }
+        for (const box of boxes) {
+          if (source) break;
+          let lock;
+          try { lock = await client.getMailboxLock(box); } catch (e) { continue; }
+          try {
+            const uids = await client.search({ header: { 'message-id': cs.source_msgid } }, { uid: true });
+            if (uids && uids.length) {
+              const m = await client.fetchOne(uids[uids.length - 1], { source: true }, { uid: true });
+              if (m && m.source) source = m.source;
+            }
+          } catch (e) { /* try the next mailbox */ }
+          finally { try { lock.release(); } catch (_) {} }
+        }
+        if (!source) { await done('source email not found in the mailbox — nothing to relay'); continue; }
+
+        const parsed = await simpleParser(source);
+        const docs = (parsed.attachments || []).filter(a => a && a.content && (a.filename || (a.size || 0) > 2048));
+        if (!docs.length) { await done('referral had no attachments'); continue; }
+
+        const attachments = docs.map((a, i) => ({
+          filename: a.filename || `document-${i + 1}`,
+          content: a.content,
+          contentType: a.contentType || 'application/octet-stream',
+        }));
+        const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+        const fileList = docs.map(a => a.filename || 'document').join(', ');
+        const note = `Hello,\n\nAttached are the document(s) the referring office sent with ${patient} (${cs.case_id}): ${fileList}.\n\nThese come straight from the referral email. MDconcierge acts only as a coordination conduit and does not retain a copy. If anything is missing, or you need imaging or imaging reports, reply here and we will request it from the attorney's office for you.`;
+        await transporter.sendMail({
+          from: `Eric Weiscarger · MDconcierge <${ZOHO_USER}>`,
+          replyTo: `MDconcierge <${ZOHO_USER}>`,
+          to: provEmails.join(', '),
+          subject: `Documents for ${patient} (${cs.case_id})`,
+          text: note + signatureText(),
+          html: emailHtml(note, [mailtoBtn('Request imaging or records', `REQUEST: ${cs.case_id}`, `Hello,\n\nFor ${patient} (${cs.case_id}), we still need:\n\n`)], caseFooter(cs.case_id)),
+          attachments,
+          headers: { 'X-MDC-Auto': 'forward' },
+        });
+        await logAudit(cs.id, 'referral_docs_relayed', `${docs.length} file(s) to provider: ${fileList}`);
+        await done(`relayed ${docs.length} file(s) to the office`);
+      } catch (e) {
+        console.error(`  doc relay failed for ${cs.case_id}: ${e.message}`);   // left unflagged: retried next cycle
+      }
+    }
+  } finally {
+    try { await client.logout(); } catch (e) { try { client.close(); } catch (_) {} }
+  }
+}
+
 // ── Excel Pharmacy (WC): route an Rx/records to Excel through MDconcierge, and relay Excel's
 // requests back to the case parties. Conduit only — attachments forwarded in-memory, not stored. ──
 const EXCEL_EMAIL = 'info@excelpharmacyservices.com';
@@ -1546,6 +1640,7 @@ async function scanEricInbox() {
         if (await seenFingerprint(ericFp)) { await recordMessage(mid, null); continue; }   // already a case for this exact email — don't duplicate
         const payload = buildLead(extracted, fromAddr, subject);
         payload.intake_fp = ericFp;
+        if (mid) payload.source_msgid = mid;   // so attachments can be relayed on acceptance
         await insertLead(payload);
         await recordMessage(mid, payload.case_id);
         caught++;
@@ -1826,6 +1921,9 @@ async function main() {
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
         }
+        // Keep the Message-ID on the case so the referral's own attachments can be re-fetched from
+        // the mailbox when the provider accepts. The documents themselves are never stored here.
+        if (_mid) payload.source_msgid = _mid;
         await insertLead(payload);
         if (_mid) await recordMessage(_mid, payload.case_id);
         console.log(`Created ${payload.case_id} [${payload.status}]`);
@@ -1861,6 +1959,9 @@ async function main() {
   await confirmNetworkRequests();          // ack the referrer "received, placing it"
   await announceInNetworkReferrals();
   await notifyRoutedProviders();
+  // Straight after the notify step, so a case accepted during this cycle gets the referral's own
+  // attachments in the same pass rather than waiting an hour.
+  await forwardAcceptedDocs();
   await followUpRouted();
   await relayAppointments();
   await confirmNetworkRequestScheduled();  // confirm to a provider referrer once scheduled (+ who's treating)
