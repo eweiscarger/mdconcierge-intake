@@ -497,6 +497,33 @@ function msgFingerprint(fromAddr, subject, body){
   return createHash('sha1').update(basis).digest('hex');
 }
 // De-dup against the cases table (the fingerprint is stored on each case as intake_fp) — reliable, unlike audit_log here.
+// Eric, 22 Sep 2026: "why is fred walker in my queue twice". Because Dr. Bresnahan REPLIED to
+// Jenna King's referral email, and the reply was read as a brand new referral. The fingerprint
+// check below could not catch it: different sender, different body, so a different hash. And the
+// known-case branch only fires when a reply quotes an MDC- reference, which his did not.
+//
+// So before opening a case, look for one that is already open for this same matter. Claim number
+// is the strongest signal (both Fred Walker rows carried identical claim numbers); failing that,
+// the patient's name plus date of injury. Closed and archived cases are ignored, so a returning
+// patient with a genuinely new injury still gets their own case.
+async function openCaseFor(payload){
+  if(!SVC || !payload) return null;
+  const live = '&status=not.in.(closed,declined,archived,duplicate)';
+  const one = async (q) => { try { const r = await sbGet(q); return (r && r[0]) || null; } catch(e){ return null; } };
+  const claim = String(payload.claim_number || '').trim();
+  if (claim.length >= 6) {
+    const hit = await one(`cases?select=id,case_id&claim_number=eq.${encodeURIComponent(claim)}${live}&limit=1`);
+    if (hit) return hit;
+  }
+  const first = String(payload.patient_first || '').trim();
+  const last  = String(payload.patient_last || '').trim();
+  const doi   = String(payload.date_of_injury || '').trim();
+  if (first && last && doi) {
+    const hit = await one(`cases?select=id,case_id&patient_first=eq.${encodeURIComponent(first)}&patient_last=eq.${encodeURIComponent(last)}&date_of_injury=eq.${encodeURIComponent(doi)}${live}&limit=1`);
+    if (hit) return hit;
+  }
+  return null;
+}
 async function seenFingerprint(fp){
   if(!fp || !SVC) return false;
   try{ return !!(await sbGet(`cases?select=id&intake_fp=eq.${fp}&limit=1`)).length; }
@@ -1756,6 +1783,17 @@ async function scanEricInbox() {
         const ericFp = msgFingerprint(fromAddr, subject, body);
         if (await seenFingerprint(ericFp)) { await recordMessage(mid, null); continue; }   // already a case for this exact email — don't duplicate
         const payload = buildLead(extracted, fromAddr, subject);
+        // A reply to a referral is not a new referral. Same claim, or same patient and date of
+        // injury, on an open case means this belongs to that case.
+        {
+          const dup = await openCaseFor(payload);
+          if (dup) {
+            console.log(`[eric@] already open as ${dup.case_id} — not creating a second case`);
+            await logAudit(dup.id, 'duplicate_referral_suppressed', `inbound from ${fromAddr}`);
+            await recordMessage(mid, dup.case_id);
+            continue;
+          }
+        }
         payload.intake_fp = ericFp;
         if (mid) payload.source_msgid = mid;   // so attachments can be relayed on acceptance
         await insertLead(payload);
@@ -2038,6 +2076,19 @@ async function main() {
           console.log(`Already handled (duplicate of a message seen via another inbox) — skipping uid ${uid}`);
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
           continue;
+        }
+        // A reply to a referral is not a new referral. Same claim, or same patient and date of
+        // injury, on an open case means this belongs to that case. (Fred Walker, 21 Sep 2026.)
+        {
+          const dup = await openCaseFor(payload);
+          if (dup) {
+            console.log(`Already open as ${dup.case_id} — not creating a second case`);
+            await logAudit(dup.id, 'duplicate_referral_suppressed', `inbound from ${fromAddr}`);
+            if (_mid) await recordMessage(_mid, dup.case_id);
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+            skipped++;
+            continue;
+          }
         }
         // Keep the Message-ID on the case so the referral's own attachments can be re-fetched from
         // the mailbox when the provider accepts. The documents themselves are never stored here.
