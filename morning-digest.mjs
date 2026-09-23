@@ -187,7 +187,14 @@ async function main() {
     ...overdue.map((i) => ({ pid: i.provider_id, days: daysSince(i.due_date), what: 'you said you would do something' })),
     ...moves.map((m) => ({ pid: m.provider_id, days: daysSince(m.recommended_date), what: 'move drafted, nobody ruled' })),
     ...waiting.map((i) => ({ pid: i.provider_id, days: daysSince(ymd(i.created_at)), what: 'waiting on your answer' })),
-  ].filter((x) => x.days > 0).sort((a, b) => b.days - a.days);
+  ]
+    // Prospects only. Jackie Tillou at Mountain Valley is a referral partner and Gustavo is
+    // VeroMed, which is Eric's own company: both write to him constantly and neither has a CRM
+    // record, correctly. Without this filter the first version of this subject line led with
+    // "Jackie Tillou waiting 41 days", which put a partner at the top of a sales waiting list.
+    // A row with no provider_id is by definition not a prospect.
+    .filter((x) => x.pid && by.has(x.pid))
+    .filter((x) => x.days > 0).sort((a, b) => b.days - a.days);
 
   const worst = waitingOn[0];
   const headline = worst
