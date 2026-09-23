@@ -103,7 +103,7 @@ async function promoteDueMoves() {
   // Approve button set the row to 'approved' - so approving a move was the single action that
   // guaranteed it would never go out, and unapproved drafts were the only ones that did. Eric's
   // approval is the point of the queue, not a reason to bury the row.
-  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft,subject,status&status=in.(pending,approved)&recommended_date=lte.${today}&order=recommended_date.asc`);
+  const due = await sGet(`mdrx_next_moves?select=id,provider_id,recommended_date,channel,angle,reason,draft,subject,status,content_id&status=in.(pending,approved)&recommended_date=lte.${today}&order=recommended_date.asc`);
   if (!due || !due.length) return 0;
   // Eric's real openings, phrased his way, for the {{days}} token.
   const slotPhrase = await availabilityPhrase();
@@ -144,6 +144,18 @@ async function promoteDueMoves() {
         console.log(`next-move: move ${mv.id} ("${String(mv.angle || '').slice(0, 60)}") matches no approved template. Left as a recommendation.`);
         continue;
       }
+      // The value_add template carries a story, so it needs the approved story this move was
+      // planned around. No story means the tokens cannot be filled, renderTemplate returns null,
+      // and the move stays a recommendation rather than going out as "saw this" with nothing
+      // attached. That is the correct failure.
+      let story = '', storylink = '';
+      if (mv.content_id) {
+        const [s] = await sGet(`mdrx_content_queue?select=headline,draft_hook,source_url&id=eq.${mv.content_id}&limit=1`);
+        if (s) {
+          story = String(s.draft_hook || s.headline || '').trim();
+          storylink = String(s.source_url || '').trim();
+        }
+      }
       draft = renderTemplate(tplKey, {
         last: p.last_name || '', first: p.first_name || '',
         days: slotPhrase,
@@ -151,6 +163,7 @@ async function promoteDueMoves() {
         // A template whose tokens cannot all be filled renders null, which sends it back to Eric
         // rather than out with a brace still in the text.
         when: mv.when || '', introducer: mv.introducer || '', state: p.state || '',
+        story, storylink,
       });
       if (!draft) {
         console.log(`next-move: move ${mv.id} matched ${tplKey} but the record lacks something it needs. Left as a recommendation.`);
@@ -330,8 +343,18 @@ async function main() {
   // on_hold means Eric took this lead off automation by hand. It was not checked here, so a lead
   // he had already pulled out kept getting drafted for, three times in a week.
   const P = await sGet(`mdrx_providers?select=id,first_name,last_name,practice_name,specialty,funnel_stage,credentials,state,funnel_score,intent_tier,funnel_last_cta,funnel_open_count,funnel_clicked,funnel_booked,behavior_flag,touch_count,last_touch_at,next_step,funnel_next_date,engaged_at,email,cell,brief_sent_at,meeting_requested_at,manual_touch_at,funnel_token&contact_home=eq.Pipeline&funnel_stage=not.in.(Won,Lost)&on_hold=eq.false&suppressed=eq.false`);
-  const openMoves = await sGet('mdrx_next_moves?select=provider_id&status=eq.pending');
-  const pending = new Set((openMoves || []).map((x) => x.provider_id));
+  // Eric, 23 Sep 2026. A pending move used to exclude its lead from ever getting another one, so a
+  // recommendation nobody ruled on froze that physician permanently: Dr. Teichman's move sat from
+  // 10 September and he was skipped on every run for thirteen days while he was actively circling
+  // the booking page. A recommendation older than this is not a plan any more, it is a blockage.
+  // The lead becomes eligible again, and overdue-escalation raises the stale row separately.
+  const STALE_MOVE_DAYS = Number(process.env.STALE_MOVE_DAYS || 7);
+  const staleCut = new Date(Date.now() - STALE_MOVE_DAYS * 86400000).toISOString().slice(0, 10);
+  const openMoves = await sGet('mdrx_next_moves?select=provider_id,recommended_date&status=eq.pending');
+  const fresh = (openMoves || []).filter((x) => !x.recommended_date || String(x.recommended_date).slice(0, 10) >= staleCut);
+  const stalled = (openMoves || []).length - fresh.length;
+  if (stalled) console.log(`next-move: ${stalled} recommendation(s) older than ${STALE_MOVE_DAYS} days are no longer blocking their lead.`);
+  const pending = new Set(fresh.map((x) => x.provider_id));
 
   // Prioritize: due today/overdue, or flagged for attention, or no next date set. Hottest first.
   // A lead Eric wrote to by hand is his conversation for the next ten days. behavior_flag is

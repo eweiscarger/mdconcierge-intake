@@ -95,12 +95,50 @@ Can we get 30 minutes on a zoom? I am open {{days}}.
 
 Anything at all, just reply or call me.`,
   },
+
+  // Eric, 23 Sep 2026, on what a touch inside a live cycle looks like: "we dont pitch, we dont
+  // sound desparate ever, we dont check in or follow up our time is important too". This is his
+  // own model, near enough verbatim. It opens on something useful to HIM, keeps the offer alive in
+  // one present-tense line on his timeline, and offers a peer instead of another ask. No calendar
+  // link on purpose: there is no question here he has to answer.
+  value_add: {
+    label: 'Share something useful, no ask',
+    subjectHints: ['thought of you', 'saw this'],
+    body: `Hi Dr. {{last}},
+
+Saw this and thought it might interest you.
+
+{{story}}
+
+{{storylink}}
+
+Still doing the work comp pharmacy thing whenever you're ready to talk about it. Or I can put you in touch with a practice like yours that does well with it, if that would help.`,
+  },
+
+  // The cycle has gone quiet and there is nothing worth sending. Hearing it from a peer is an
+  // easier yes than another conversation with the vendor, and it is a genuinely different ask.
+  peer_reference: {
+    label: 'Offer a peer, not another meeting',
+    subjectHints: ['someone worth talking to', 'a practice like yours'],
+    body: `Hi Dr. {{last}},
+
+This might be easier to hear from someone who isn't me.
+
+I work with a practice a lot like yours that runs the program, and I'm happy to put the two of you in touch so you can ask whatever you want without me in the middle.
+
+Say the word and I'll make the introduction. Otherwise I'll leave it with you.`,
+  },
 };
 
 // The agent's own free-text angle is matched to one of the six. Anything unmatched returns null,
 // which is the signal to leave it as a recommendation rather than send.
 export function templateForAngle(angle) {
   const a = String(angle || '').toLowerCase();
+  // Order matters: these are tried top to bottom and the first hit wins. The two cycle moves sit
+  // above intro_followup on purpose, because "introduce him to a practice like his" is a peer
+  // reference and would otherwise be caught by the /intro/ test and answered as a first contact.
+  if (/peer|reference|another practice|practice like|someone else|put .* in touch/.test(a)) return 'peer_reference';
+  if (/value add|value-add|saw this|thought of you|thought it might|share|content|story|news|article|useful/.test(a)) return 'value_add';
   if (/promis|reconnect|return|follow through|the date/.test(a))      return 'promised_date';
   if (/confirm|pre-call|reminder/.test(a))                            return 'confirm_call';
   if (/review|internal|discuss with|take it to/.test(a))              return 'after_review';
