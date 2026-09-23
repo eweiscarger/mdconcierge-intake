@@ -456,7 +456,14 @@ async function run() {
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
       subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText,
       objective: ['intro','ruling','access','economics'][touch-1] || 'economics',
-      template_key: `cold_${touch}`, channel: 'email',
+      // 23 Sep 2026: a second template_key, 'cold', is assigned below and wins, so `cold_${touch}`
+      // never reached the database. It was not harmless. send-outreach decided "is this a cold
+      // touch" with startsWith("cold_"), which therefore evaluated false on every real cadence row
+      // and disabled the guard that stops a cold touch reaching a physician who has asked for
+      // information. Dr Waltrip asked on 4 Aug and got a cold touch three minutes later; Dr
+      // Teichman asked on 29 Jul and got six. The sender now keys on touch_no instead, and the
+      // dead assignment is removed so nothing reads it as live again.
+      channel: 'email',
       // The letter above is the HTML half, with his typed signature inside it, so the sender adds
       // no card and no logo image.
       body_html: htmlLetter(bodyText),
