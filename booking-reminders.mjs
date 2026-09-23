@@ -15,7 +15,7 @@ const ERIC = process.env.ZOHO_ERIC_USER || 'eric@mdconcierge.net';
 const TZ = 'America/New_York';
 const H = { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY, 'Content-Type': 'application/json' };
 
-const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
+const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); if (!r.ok) throw new Error(`supabase GET ${p} -> ${r.status} ${await r.text().catch(() => '')}`.slice(0, 300)); return r.json(); };
 const sPatch = async (p, row) => {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) });
   if (!r.ok) console.error(`patch ${p} ${r.status}: ${await r.text()}`);

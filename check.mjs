@@ -158,7 +158,18 @@ export function emailFaults(m) {
   // wanted the literal "are not interested", which "you're not interested" does not contain, so
   // the new line would have been invisible to this rule and every cold email refused for carrying
   // no opt-out. Matching "not interested" in any form covers both wordings and anything close.
-  const OPTOUT = /no longer like to hear|not interested|don.t wish to hear|rather i stop|reply stop|unsubscribe\.html/i;
+  // 23 Sep 2026, the THIRD time this pattern has been too narrow. It was widened on 17 Sep when
+  // Eric's wording moved to "you're not interested" and the literal "are not interested" stopped
+  // matching. It broke again the same way: seven drip emails carrying
+  //   If you don't treat work comp or aren't interested, reply "stop" and I won't contact you again.
+  // were refused for having no opt-out while the line sat in plain sight. Two misses at once:
+  // "aren't interested" is not the literal "not interested", and reply "stop" has a quotation mark
+  // between the two words.
+  //
+  // So this stops chasing literals. Any negated form of "interested", and reply/say stop with or
+  // without quotes. The same pattern lives at the wire in send-outreach.ts and both must move
+  // together, or the composer and the sender disagree about the same email.
+  const OPTOUT = /no longer like to hear|(?:not|are ?n.t|is ?n.t|were ?n.t|do ?n.t seem) interested|don.t wish to hear|rather i stop|(?:reply|say|send)\s*["'‘’“”]?\s*stop["'‘’“”]?|unsubscribe\.html/i;
   // Only campaign mail carries an opt-out. A one to one email Eric writes to a physician he is in
   // conversation with is not marketing, and an unsubscribe line at the bottom of it announces that
   // it is, which is both untrue and the exact impression the letter format exists to avoid. The

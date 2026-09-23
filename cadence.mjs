@@ -107,7 +107,7 @@ async function ensureToken(p) {
 }
 
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
-const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
+const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); if (!r.ok) throw new Error(`supabase GET ${p} -> ${r.status} ${await r.text().catch(() => '')}`.slice(0, 300)); return r.json(); };
 const sPost = async (t, row, prefer = 'return=minimal') => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: prefer }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
 const sPatch = async (p, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`patch ${p} ${r.status}: ${await r.text()}`); };
 // Nothing reaches the approval queue without passing the gate. A refusal is loud: it names the
@@ -154,6 +154,13 @@ async function queueEmail(row, campaign = true) {
 }
 const today = () => new Date().toISOString().slice(0, 10);
 const addDaysISO = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+
+// RULES section 6, "the sequence is the spacing": 3 days after touch 1, 5 after touch 2, 7 after
+// touch 3, and 7 for anything past the end. The same three numbers desk.mjs plans from (TOUCH_GAP
+// there); they are repeated rather than imported because importing desk.mjs to read one constant
+// would pull the whole desk run in behind it. If one moves, move both.
+const NEXT_TOUCH_DAYS = { 1: 3, 2: 5, 3: 7 };
+const nextTouchDate = (justQueued) => addDaysISO(NEXT_TOUCH_DAYS[Number(justQueued)] || 7);
 
 // Clean, personal plain-text touches, ending at "Best," with the signature attached at send
 // time by send-outreach. Each carries a soft opt-out in Eric's own words: this is targeted
@@ -333,6 +340,15 @@ async function run() {
   // Already-queued leads (avoid duplicates).
   const openBox = await sGet('mdrx_outbox?select=provider_id&status=eq.pending');
   const queued = new Set((openBox || []).map((x) => x.provider_id));
+  // Belt and braces on the duplicate check. `queued` only knows rows still PENDING, and the send
+  // window flips the morning's rows to 'sent' (or 'held') around 7am, which empties it. A second
+  // run after that saw a physician with nothing pending and queued him again the same day: Dr
+  // Brislin ended up with FOUR copies of the sequence waiting (outbox 797, 807, 817, 828). The
+  // real fix is the funnel_next_date advance further down; this is the belt. Same idea the drip
+  // path has always had, which is why the drip never produced a pile like that.
+  // Kept as its own set rather than folded into `queued`, because `queued` also sizes the batch
+  // against the daily cap and must keep meaning "waiting for approval".
+  const touchedToday = new Set((await sGet(`mdrx_outbox?select=provider_id&status=in.(sent,held)&scheduled_date=eq.${today()}`) || []).map((x) => x.provider_id));
   // The cap is a ceiling on what is WAITING for approval, not on what this run adds. Without
   // this, a manual trigger on top of the scheduled run would silently double the batch.
   const room = Math.max(0, cap - queued.size);
@@ -393,6 +409,7 @@ async function run() {
   for (const p of pool) {
     if (queuedCount >= room) break;
     if (queued.has(p.id)) continue;
+    if (touchedToday.has(p.id)) continue;         // already had one today, whatever state it reached
     if (suppressed.has((p.email || '').toLowerCase())) continue;
     if (domainBlocked(p.email)) continue;
     // Eric, 15 Sep 2026: restart slowly on verified addresses only. Guessed initials and accept-all
@@ -435,7 +452,7 @@ async function run() {
     // the cold mail for six days.
     const footer = ''; // the reply-stop opt-out is inside touchBody, above the sign-off
     const bodyText = touchBody(touch, p, hook) + footer;
-    await queueEmail({
+    const ok = await queueEmail({
       _last: p.last_name, provider_id: p.id, touch_no: touch, to_email: p.email,
       subject: SUBJECTS[touch] || SUBJECTS[4], body_text: bodyText,
       objective: ['intro','ruling','access','economics'][touch-1] || 'economics',
@@ -447,6 +464,15 @@ async function run() {
       // Not 'plain': that key makes the sender rebuild the HTML itself and append its logo block.
       template_key: 'cold',
     });
+    // Move him along the calendar, and ONLY if a row actually exists. This path never did, and the
+    // pending-only duplicate check above was the only thing holding the sequence apart: the send
+    // window flips the morning's rows to 'sent', the check goes blind, and the same physician
+    // qualifies again on the next run and is handed his NEXT touch the same day. Dr Brislin
+    // collected four queued copies that way (outbox 797, 807, 817, 828), and a four-touch sequence
+    // meant to run over weeks can collapse into days. The drip path has always patched the date
+    // forward after queueing; the cold path now does the same, on RULES section 6 spacing.
+    // A refused email must not push him out: nothing was queued, so nothing is owed a gap.
+    if (ok) await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_next_date: nextTouchDate(touch) });
     if (contentId) { const cur = await sGet(`mdrx_content_queue?select=used_count&id=eq.${contentId}`); await sPatch(`mdrx_content_queue?id=eq.${contentId}`, { used_count: ((cur[0] && cur[0].used_count) || 0) + 1 }); }
     if (prac) practicesToday.set(prac, (practicesToday.get(prac) || 0) + 1);
     queued.add(p.id); queuedCount++;

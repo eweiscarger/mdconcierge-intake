@@ -23,7 +23,7 @@ for (const [k, v] of Object.entries({ ERIC_PASS, ANTHROPIC_API_KEY, SUPABASE_URL
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
-async function sGet(path) { const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H }); return r.ok ? r.json() : []; }
+async function sGet(path) { const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H }); if (!r.ok) throw new Error(`supabase GET ${path} -> ${r.status} ${await r.text().catch(() => '')}`.slice(0, 300)); return r.json(); }
 async function sPost(table, row, prefer = 'return=minimal') {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method: 'POST', headers: { ...H, Prefer: prefer }, body: JSON.stringify(row) });
   if (!r.ok) console.error(`insert ${table} ${r.status}: ${await r.text()}`);

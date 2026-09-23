@@ -23,7 +23,7 @@ const today = new Date().toISOString().slice(0, 10);
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const H = { apikey: SUPABASE_SERVICE_KEY, Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' };
-const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); return r.ok ? r.json() : []; };
+const sGet = async (p) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${p}`, { headers: H }); if (!r.ok) throw new Error(`supabase GET ${p} -> ${r.status} ${await r.text().catch(() => '')}`.slice(0, 300)); return r.json(); };
 const sPost = async (t, row) => { const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(row) }); if (!r.ok) console.error(`insert ${t} ${r.status}: ${await r.text()}`); };
 
 const SYSTEM = `You are the content and business-intelligence scout for Eric Weiscarger's MDRx Workers' Compensation Pharmacy Program. Eric recruits physicians (orthopedics, interventional pain, PM&R, neurology, podiatry) into a compliant work-comp pharmacy program with the MDRx360 team.

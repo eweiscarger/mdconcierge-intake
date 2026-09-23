@@ -1,0 +1,46 @@
+name: Outreach dead-man alarm
+# Shouts when the outreach sender has stopped sending.
+#
+# From 17 to 23 Sep 2026 the send path returned HTTP 500 on every attempt for six days and nothing
+# alerted anyone: the existing Watchdog only reads the referral-intake heartbeat, and the Morning
+# send report says "nothing sent this morning" for a crash and for a quiet day in identical words.
+# outreach-watch.mjs tells those two apart and only emails when rows were genuinely due and the
+# send window closed with nothing sent.
+#
+# 13:00 UTC is 09:00 ET, well clear of the 06:30-07:30 ET window (and of the 12:30 UTC morning
+# report), so by the time this runs the morning has definitively happened or definitively not.
+on:
+  schedule:
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: outreach-watch
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Check that the outreach actually sent
+        env:
+          ERIC_USER: eric@mdconcierge.net
+          MDRX_ERIC_PASS: ${{ secrets.MDRX_ERIC_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          # The cron runs every day because weekday-restricted schedules were not firing.
+          # Saturday is 6 and Sunday is 7, so anything from 6 up stops here.
+          if [ "$(date -u +%u)" -ge 6 ]; then echo "weekend, nothing to do"; exit 0; fi
+          # No `|| true` and no error swallowing: if this step cannot check, the run goes RED.
+          # A monitor that passes when it failed to look is the bug being fixed.
+          node outreach-watch.mjs
