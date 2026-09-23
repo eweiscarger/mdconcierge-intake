@@ -71,6 +71,13 @@ async function main() {
     if (!p) return fallback || 'someone not on the book';
     return name(p) + (p.practice_name ? `, ${p.practice_name}` : '');
   };
+  // Eric, 23 Sep 2026: "but i have to dig!". The header of this file used to say it deliberately
+  // linked nothing. That was wrong. Naming a person and making him then go find them is the whole
+  // complaint. Every name he has to act on now carries the link that opens that record with the
+  // draft already on screen, so acting is one click from the mail.
+  const COCKPIT = 'https://mdconcierge.net/admin-v2.html';
+  const lnk = (pid) => (by.has(pid) ? `${COCKPIT}?open=${pid}` : COCKPIT);
+  const whoL = (pid, fallback) => `${who(pid, fallback)}\n     ${lnk(pid)}`;
 
   const promises = items.filter((i) => i.kind === 'promise');
   const quiet = items.filter((i) => i.kind === 'quiet');
@@ -152,19 +159,48 @@ async function main() {
   const decisions = [];
   if (drafts.length) decisions.push(`${drafts.length} repl${drafts.length === 1 ? 'y is' : 'ies are'} drafted and waiting on your yes or no. Oldest: ${who(drafts[drafts.length - 1].provider_id, drafts[drafts.length - 1].from_name)}, "${String(drafts[drafts.length - 1].subject || '').slice(0, 70)}".`);
   if (overdue.length) decisions.push(`You are past the date on ${overdue.length} thing${overdue.length === 1 ? '' : 's'} you told someone you would do. First one: ${who(overdue[0].provider_id)}.`);
-  if (moves.length) decisions.push(`${moves.length} next move${moves.length === 1 ? ' is' : 's are'} drafted on records and nobody has ruled on ${moves.length === 1 ? 'it' : 'them'}.`);
+  // Named, aged and linked. "24 next moves are drafted" is a statistic and he scrolled past it for
+  // thirteen days. "Adam Teichman, drafted 13 days ago" with the link is a person he can call.
+  if (moves.length) {
+    const m = moves[0];
+    const age = Math.max(0, Math.floor((Date.parse(today + 'T12:00:00Z') - Date.parse(String(m.recommended_date).slice(0, 10) + 'T12:00:00Z')) / 86400000));
+    decisions.push(`${moves.length} drafted next move${moves.length === 1 ? '' : 's'} nobody has ruled on. Oldest is ${whoL(m.provider_id)}\n     drafted ${age} day${age === 1 ? '' : 's'} ago: "${String(m.subject || '').slice(0, 70)}"`);
+  }
   if (held.length) decisions.push(`${held.length} email${held.length === 1 ? '' : 's'} sat held by the copy gate. They need wording you approve or they never go.`);
   if (waiting.length) decisions.push(`${waiting.length} ${waiting.length === 1 ? 'person is' : 'people are'} waiting on an answer from you, longest ${who(waiting[0].provider_id)}.`);
   section('ONLY YOU CAN DECIDE', decisions.slice(0, 3).map((d, i) => `  ${i + 1}. ${d}`));
 
   if (!L.length) { console.log('morning-digest: nothing worth saying, sending nothing.'); return; }
 
-  const headline = [
-    thisMorning.length ? `${thisMorning.length} out` : null,
-    repliedBy.size ? `${repliedBy.size} in` : null,
-    promises.length ? `${promises.length} owed` : null,
-    quiet.length ? `${quiet.length} quiet` : null,
-  ].filter(Boolean).join(', ');
+  // Eric, 23 Sep 2026: "50 quiet" is a number and you cannot act on a number. This mail arrived
+  // every day for weeks reading like that and became furniture, while a drafted note telling him
+  // to call Teichman sat unopened for thirteen days. The subject now names the single most
+  // overdue human being and how long they have waited. If nobody is waiting, it names nothing,
+  // and if nothing needs deciding at all the mail does not go, so its arrival means something.
+  const nameOnly = (pid, fb) => { const p = by.get(pid); return p ? name(p) : (fb || 'someone'); };
+  const daysSince = (d) => (d ? Math.floor((Date.parse(today + 'T12:00:00Z') - Date.parse(String(d).slice(0, 10) + 'T12:00:00Z')) / 86400000) : 0);
+
+  // Everyone who is actually waiting on Eric, worst first. A drafted reply, a promise he made, a
+  // recommendation nobody ruled on, a person who wrote in: all the same thing to the person waiting.
+  const waitingOn = [
+    ...drafts.map((d) => ({ pid: d.provider_id, fb: d.from_name || d.from_addr, days: daysSince(ymd(d.received_at)), what: 'wrote in, reply drafted' })),
+    ...overdue.map((i) => ({ pid: i.provider_id, days: daysSince(i.due_date), what: 'you said you would do something' })),
+    ...moves.map((m) => ({ pid: m.provider_id, days: daysSince(m.recommended_date), what: 'move drafted, nobody ruled' })),
+    ...waiting.map((i) => ({ pid: i.provider_id, days: daysSince(ymd(i.created_at)), what: 'waiting on your answer' })),
+  ].filter((x) => x.days > 0).sort((a, b) => b.days - a.days);
+
+  const worst = waitingOn[0];
+  const headline = worst
+    ? `${nameOnly(worst.pid, worst.fb)} waiting ${worst.days} day${worst.days === 1 ? '' : 's'}`
+      + (waitingOn.length > 1 ? ` and ${waitingOn.length - 1} more` : '')
+    : [thisMorning.length ? `${thisMorning.length} out` : null, repliedBy.size ? `${repliedBy.size} in` : null].filter(Boolean).join(', ');
+
+  // Nothing for him to decide means no mail. A digest that arrives on the empty days is the one
+  // he stops opening on the days it matters.
+  if (!worst && !decisions.length && !repliedBy.size) {
+    console.log('morning-digest: nobody is waiting and nothing needs deciding, sending nothing.');
+    return;
+  }
   const subject = `the desk, ${dayName(today).slice(0, 3)} ${shortDate(today)}${headline ? ': ' + headline : ''}`;
   const text = L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 
