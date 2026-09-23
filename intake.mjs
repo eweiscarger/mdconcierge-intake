@@ -144,6 +144,33 @@ ${String(body || '').slice(0, 5000)}${docText ? `\n\nAttached document text:${do
 // 16 Sep 2026: that is how a hand-coordinated referral put two web leads in the table a minute
 // apart and sent a patient confirmation to the referring practice. The guard is not the bug; using
 // the anon key here was. SVC is declared further down but read at call time, so this is safe.
+// Which attorney does this email belong to? Eric, 23 Sep 2026: "an attorney can be with a firm,
+// but they often operate independently and have their own assistants and teams."
+//
+// So the answer is the specific ATTORNEY, never the firm. Martin Law is paworkinjury.com and Jenna
+// King is, in her own record, "one of several attorneys" there. Matching on the domain would put
+// every Martin Law referral on Jenna's id and show her colleagues' cases in her portal, which is
+// the same over-sharing we just removed from case 322.
+//
+// Matches her own address first, then her paralegal/team address, so a referral sent by the team
+// still lands on her id and appears in the access her team already has.
+//
+// Fails SOFT and deliberately. No match, or a lookup error, leaves attorney_id null: the case is
+// still created exactly as before and lands in the queue for Eric, it just is not attributed.
+// Under-attributing is a nuisance he can fix in one click. Mis-attributing means one firm reads
+// another's case, which is not recoverable.
+async function attorneyIdFor(fromAddr) {
+  const em = String(fromAddr || '').trim().toLowerCase();
+  if (!em || !/@/.test(em) || !SVC) return null;
+  const q = encodeURIComponent(em);
+  try {
+    const own = await sbGet(`attorneys?select=id&active=is.true&email=ilike.${q}&limit=1`);
+    if (own && own[0]) return own[0].id;
+    const team = await sbGet(`attorneys?select=id&active=is.true&paralegal_email=ilike.${q}&limit=1`);
+    if (team && team[0]) return team[0].id;
+  } catch (e) { console.error('  attorney lookup failed (case will be unattributed): ' + e.message); }
+  return null;
+}
 async function insertLead(payload) {
   const key = SVC || SUPABASE_KEY;
   if (!SVC) console.error('  insertLead: SUPABASE_SERVICE_KEY missing — the insert guard will refile this as a web lead');
@@ -1796,6 +1823,10 @@ async function scanEricInbox() {
         }
         payload.intake_fp = ericFp;
         if (mid) payload.source_msgid = mid;   // so attachments can be relayed on acceptance
+        // Attribute the case to the attorney who sent it, so it appears in their portal by
+        // ownership. Without this every case landed with attorney_id null and the portal fell back
+        // to matching the sender's address inside the free-text notes blob.
+        payload.attorney_id = await attorneyIdFor(fromAddr);
         await insertLead(payload);
         await recordMessage(mid, payload.case_id);
         caught++;
@@ -2093,6 +2124,10 @@ async function main() {
         // Keep the Message-ID on the case so the referral's own attachments can be re-fetched from
         // the mailbox when the provider accepts. The documents themselves are never stored here.
         if (_mid) payload.source_msgid = _mid;
+        // Attribute the case to the attorney who sent it. Deliberately placed here rather than
+        // inside buildLead: both the parsed payload and the fallbackLead payload converge on this
+        // variable, so a referral the model failed to parse is still attributed to its sender.
+        payload.attorney_id = await attorneyIdFor(fromAddr);
         await insertLead(payload);
         if (_mid) await recordMessage(_mid, payload.case_id);
         console.log(`Created ${payload.case_id} [${payload.status}]`);
