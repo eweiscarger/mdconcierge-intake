@@ -310,9 +310,11 @@ function touchBody(touch, p, hook) {
 // as a press release, which is what it was.
 const SUBJECTS = {
   1: "work comp scripts that don't get filled",
-  2: "Re: work comp scripts that don't get filled",
-  3: "Re: work comp scripts that don't get filled",
-  4: "Re: work comp scripts that don't get filled",
+  // Eric, 28 Sep 2026: "why would we ever have a re: in an email when we arent responding." These
+  // are cold touches to people who never wrote back, so none of them is a reply. No "Re:".
+  2: "work comp scripts that don't get filled",
+  3: "work comp scripts that don't get filled",
+  4: "work comp scripts that don't get filled",
 };
 
 async function run() {

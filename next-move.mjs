@@ -267,7 +267,10 @@ async function subjectFor(p, mv) {
   const [hand] = await sGet(`mdrx_messages?select=subject,sent_at&provider_id=eq.${p.id}&subject=not.is.null&order=sent_at.desc&limit=1`);
   const [past] = await sGet(`mdrx_outbox?select=subject,id&provider_id=eq.${p.id}&status=eq.sent&subject=not.is.null&order=id.desc&limit=1`);
   const prior = String((hand && hand.subject) || (past && past.subject) || '').trim();
-  if (prior) return /^re:/i.test(prior) ? prior : 'Re: ' + prior;
+  // "Re:" only when he actually wrote to us. Eric, 28 Sep 2026: "why would we ever have a re: in an
+  // email when we arent responding." A follow-up to our own unanswered email keeps its plain subject.
+  const [theyWrote] = await sGet(`mdrx_messages?select=id&provider_id=eq.${p.id}&direction=eq.in&limit=1`);
+  if (prior) return theyWrote ? (/^re:/i.test(prior) ? prior : 'Re: ' + prior) : prior.replace(/^(re:s*)+/i, '');
   // Nobody has written to him yet. A plain line about the thing itself, not a campaign headline.
   return 'The work comp pharmacy program';
 }
@@ -429,8 +432,10 @@ async function main() {
     // in Duluth was about to get one headed "PA Court Opens Up Significant Revenue Opportunity",
     // which is the wrong state and the wrong conversation at once.
     const lastSubject = (thread.find((m) => String(m.subject || '').trim()) || {}).subject || '';
+    // "Re:" only if he has actually written to us (Eric, 28 Sep 2026). Otherwise the plain subject.
+    const theyWrote = (handMail || []).some((m) => m.direction === 'in');
     const replySubject = lastSubject
-      ? (/^re:/i.test(lastSubject.trim()) ? lastSubject.trim() : 'Re: ' + lastSubject.trim())
+      ? (theyWrote ? (/^re:/i.test(lastSubject.trim()) ? lastSubject.trim() : 'Re: ' + lastSubject.trim()) : lastSubject.trim().replace(/^(re:s*)+/i, ''))
       : '';
     const ctx = {
       name: `${p.first_name || ''} ${p.last_name || ''}`.trim(), last_name: p.last_name,
