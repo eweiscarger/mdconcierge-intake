@@ -117,7 +117,13 @@ async function main() {
   console.log(`news-monitor: added ${added} pending (${openers} openers, ${opps} opportunities).`);
 
   // Nudge Eric to review, only when there is something new.
-  if (added > 0) {
+  // 28 Sep 2026, Eric: "unless something is seriously wrong or a lead did something cut it out".
+  // The "fresh content ideas to review" email is informational: the stories are still queued in
+  // mdrx_content_queue exactly as before and show in the Cockpit. Set EMAIL_REVIEW_NUDGE to true
+  // to restore it. Failure alerts (alertFailure below) are unchanged.
+  const EMAIL_REVIEW_NUDGE = false;
+  if (added > 0 && !EMAIL_REVIEW_NUDGE) console.log(`news-monitor: review nudge not emailed (see 28 Sep 2026 note).`);
+  if (added > 0 && EMAIL_REVIEW_NUDGE) {
     try {
       const t = transporter;   // shared capped transport
       await t.sendMail({

@@ -34,6 +34,13 @@ const dayKey = (d) => new Intl.DateTimeFormat('en-CA', {
 // the existing mailer().sendMail call sites below are untouched.
 const mailer = () => transporter;
 
+// 28 Sep 2026, Eric: "unless something is seriously wrong or a lead did something cut it out".
+// The meeting reminders stay: each one is about a physician who booked time with him. The one
+// cut is the "Confirmation sent" note for a booking made outside the page, which only reports that
+// the engine did its job. The confirmation itself still goes to the physician. Set this back to
+// true to restore that note.
+const EMAIL_CONFIRMATION_SENT_NOTE = false;
+
 async function notify(subject, html) {
   await mailer().sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC}>`, to: ERIC, subject, html, headers: { 'X-MDC-Auto': 'reminder' } });
 }
@@ -137,7 +144,7 @@ const run = async () => {
       try {
         await mailPhysician(b.email, "You're on my calendar, one quick step before our call", confirmHtml(b));
         await sPatch(`bookings?id=eq.${b.id}`, { confirmed_at: new Date().toISOString() });
-        await notify(`Confirmation sent: ${b.name}`, `<p style="font-size:15px;">This one was booked outside the page, so the engine sent ${esc(b.name)} the confirmation.</p>${await brief(b)}`);
+        if (EMAIL_CONFIRMATION_SENT_NOTE) await notify(`Confirmation sent: ${b.name}`, `<p style="font-size:15px;">This one was booked outside the page, so the engine sent ${esc(b.name)} the confirmation.</p>${await brief(b)}`);
         console.log(`confirmation sent: ${b.name} @ ${fmt(new Date(start))}`);
         sent++;
       } catch (e) {

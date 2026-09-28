@@ -1715,9 +1715,15 @@ async function healthReport() {
     }
   }
   // once-a-day "still alive" confirmation (dead-man's switch: if these stop, something's wrong)
+  // 28 Sep 2026, Eric: "unless something is seriously wrong or a lead did something cut it out".
+  // The daily "running normally" email is informational, so it is no longer sent. An engine that
+  // stops is still caught: watchdog.mjs runs as its own workflow and emails him once per outage.
+  // last_heartbeat_date is still stamped below. Set EMAIL_DAILY_HEALTH_CHECK to true to restore it.
+  const EMAIL_DAILY_HEALTH_CHECK = false;
   if (!row || row.last_heartbeat_date !== today) {
     const t = `✓ Your MDconcierge coordination engine is running normally (checked ${new Date().toUTCString()}). No action needed — this is your daily health confirmation. If you ever STOP getting this, the engine may be down and worth a look.`;
-    try { await sendMail(ADMIN_EMAIL, '✓ MDconcierge engine — daily health check', t, emailHtml(t, [])); } catch (e) {}
+    if (EMAIL_DAILY_HEALTH_CHECK) { try { await sendMail(ADMIN_EMAIL, '✓ MDconcierge engine — daily health check', t, emailHtml(t, [])); } catch (e) {} }
+    else console.log('daily health check: engine running normally (not emailed, see 28 Sep 2026 note)');
     try { await sbPatch(`system_health?id=eq.1`, { last_heartbeat_date: today }); } catch (e) {}
   }
 }

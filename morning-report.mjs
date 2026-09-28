@@ -9,6 +9,16 @@
 // Outbound goes through the shared capped transport - see mailer.mjs for why.
 import { transporter } from './mailer.mjs';
 
+// 28 Sep 2026, Eric: "unless something is seriously wrong or a lead did something cut it out".
+// This job exists only to email Eric a morning summary of what the outbox sent, and he sees that on the dashboard Home page now.
+// It is RETIRED: it logs and exits before reading or sending anything, and its schedule can be
+// turned off separately. The code below is kept intact. Set REPORT_RETIRED to false to bring it back.
+const REPORT_RETIRED = true;
+if (REPORT_RETIRED) {
+  console.log('morning-report: retired 28 Sep 2026 ("unless something is seriously wrong or a lead did something cut it out"). Nothing read, nothing sent.');
+  process.exit(0);
+}
+
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
 const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;

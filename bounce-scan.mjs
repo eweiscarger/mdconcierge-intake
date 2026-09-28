@@ -55,6 +55,17 @@ function classifyBounce(blob) {
   return { cause: 'dead', code };   // unclassified 5.x: treat as dead, which is the safe default
 }
 
+// 28 Sep 2026, Eric: "unless something is seriously wrong or a lead did something cut it out".
+// A bounced cold email is not serious, so the routine reports (addresses bounced, doctors located
+// in the NPI registry, plain-text retries queued) are logged here and not emailed. The work behind
+// them (suppressing, noting, requeueing) is unchanged. A spam complaint still emails him, because
+// it pauses all sending. Set EMAIL_ROUTINE_REPORTS back to true to restore the routine emails.
+const EMAIL_ROUTINE_REPORTS = false;
+async function routineReport(subject, text) {
+  if (EMAIL_ROUTINE_REPORTS) return alertEric(subject, text);
+  console.log(`not emailed (routine report, see 28 Sep 2026 note): ${subject}`);
+}
+
 async function alertEric(subject, text) {
   try {
     const t = transporter;   // shared capped transport
@@ -167,7 +178,7 @@ async function main() {
     } catch (e) { console.error(`plain-text requeue failed for ${r.email}: ${e.message}`); }
   }
   if (requeued) {
-    await alertEric(`[MDconcierge] ${requeued} message(s) refused on content, plain-text retry queued`,
+    await routineReport(`[MDconcierge] ${requeued} message(s) refused on content, plain-text retry queued`,
       `These were not dead addresses. The receiving server refused the formatted message, so a plain-text version is queued for your approval in the Cockpit:\n\n${retryLines.join('\n')}\n\n`
       + `Nothing was sent. Nobody was suppressed. If a plain-text retry also fails, that address is left alone.`);
   }
@@ -212,7 +223,7 @@ async function main() {
     } catch (e) { console.error(`relocation check failed for provider ${pid}: ${e.message}`); }
   }
   if (relocFound) {
-    await alertEric(`[MDconcierge] ${relocFound} bounced doctor(s) located in PA`,
+    await routineReport(`[MDconcierge] ${relocFound} bounced doctor(s) located in PA`,
       `These addresses hard-bounced. The NPI registry has current information for them:\n\n${relocLines.join('\n')}\n\n`
       + `Each is noted on the lead's timeline. The address on file was not changed and no email address was guessed.`);
   }
@@ -255,7 +266,7 @@ async function main() {
     // An address with no provider row behind it still gets reported, by address.
     const known = new Set((rows || []).map((r) => String(r.email || '').toLowerCase()));
     for (const e of newHard) if (!known.has(String(e).toLowerCase())) named.push(String(e));
-    await alertEric(`[MDconcierge] ${newHard.length} address(es) bounced, removed from the cadence`,
+    await routineReport(`[MDconcierge] ${newHard.length} address(es) bounced, removed from the cadence`,
       `These bounced and are out of the cadence. Nothing else changed and sending was not touched.\n\n  `
       + named.join('\n\n  ')
       + `\n\nEach one is suppressed, marked Bad Address, and anything queued for it was cancelled.`

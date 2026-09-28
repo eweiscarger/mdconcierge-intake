@@ -146,7 +146,17 @@ async function scan() {
 
 const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// 28 Sep 2026, Eric: "unless something is seriously wrong or a lead did something cut it out".
+// The daily "N Reddit posts worth answering" email is a digest, so digest mode now only logs. The
+// scan still drafts answers into reddit_leads, and they stay at status 'drafted' (not marked
+// emailed) so they are all still there to read. Set EMAIL_REDDIT_DIGEST to true to restore it.
+const EMAIL_REDDIT_DIGEST = false;
+
 async function digest() {
+  if (!EMAIL_REDDIT_DIGEST) {
+    console.log('reddit-monitor digest: not emailed (see 28 Sep 2026 note); drafted answers stay in reddit_leads.');
+    return;
+  }
   const rows = await sGet('reddit_leads?select=*&status=eq.drafted&emailed_at=is.null&order=posted_at.desc&limit=25');
   if (!rows.length) { console.log('reddit-monitor digest: nothing new to send.'); return; }
   const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1f2937;max-width:680px;">
@@ -171,8 +181,17 @@ ${rows.map((r, i) => `<div style="border:1px solid #e5e7eb;border-radius:8px;pad
   console.error('reddit-monitor failed: ' + msg);
   if (/credit balance|every Reddit feed failed/i.test(msg)) {
     try {
-      const t = transporter;   // shared capped transport
-      await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] the Reddit monitor hit a problem', text: msg });
+      // 28 Sep 2026: the scan runs four times a day, so an empty credit balance used to email
+      // Eric four times a day about the same problem. Same job_alerts throttle the other jobs
+      // use (next-move, news-monitor, mdrx-inbox): at most one alert per 24 hours.
+      const prev = await sGet('job_alerts?select=last_alert_at&job=eq.reddit-monitor').catch(() => []);
+      const last = prev[0]?.last_alert_at ? new Date(prev[0].last_alert_at).getTime() : 0;
+      if (Date.now() - last < 24 * 3600 * 1000) { console.log('reddit-monitor: already alerted in the last 24h, staying quiet.'); }
+      else {
+        const t = transporter;   // shared capped transport
+        await t.sendMail({ headers: { 'X-MDC-Bot': 'engine' }, from: `"MDconcierge" <${ERIC_USER}>`, to: ERIC_USER, subject: '[MDconcierge] the Reddit monitor hit a problem', text: msg });
+        await fetch(`${SUPABASE_URL}/rest/v1/job_alerts`, { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ job: 'reddit-monitor', last_alert_at: new Date().toISOString(), last_msg: msg.slice(0, 300) }) });
+      }
     } catch (_) {}
   }
   process.exit(1);
