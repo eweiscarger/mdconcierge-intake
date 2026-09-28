@@ -1,12 +1,12 @@
 name: News and content scout
-# Weekly: uses Claude web search to scan the standing sources for fresh, on-message
+# Monthly (Eric, 28 Sep 2026, to save API credit): uses Claude web search to scan the standing sources for fresh, on-message
 # developments (villains = PBMs/TPAs/denials) and hot ancillary revenue opportunities,
 # drafts openers + intel in the locked voice, and queues them for Eric to approve.
 # SENDS NOTHING to prospects. Governed by MESSAGING_AND_CONTENT.md.
 on:
+  # Started on the 1st of each month by pg_cron job 'engine-news-monthly' via engine_dispatch.
+  # No schedule here: GitHub stops registering schedules on edited workflow files.
   workflow_dispatch: {}
-  schedule:
-    - cron: '0 12 * * 1'   # Mondays ~7-8am ET
 
 concurrency:
   group: news-monitor
