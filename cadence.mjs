@@ -433,6 +433,18 @@ async function run() {
       await sPatch(`mdrx_providers?id=eq.${p.id}`, { touch_count: alreadySent });
     }
     if (touch > 4) { await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_stage: 'Not Now', next_step: 'Recycle', recycle_date: addDaysISO(90), funnel_next_date: addDaysISO(90) }); continue; }
+    // 24 Sep 2026, Eric: MDRx is not Pennsylvania only, but the Pennsylvania ruling is. Touches 1
+    // and 2 are built on the June 700 Pharmacy decision, and touch 2 is nothing else, so neither can
+    // go to a physician outside PA. Recon found two Rothman doctors practising in Florida behind a
+    // Philadelphia brand match, which is exactly how one would have slipped through.
+    // They are held, not dropped: touches 3 and 4 carry no ruling and still reach them, and a
+    // non-PA campaign with its own approved wording is Eric's to write later.
+    const leadState = String(p.state || '').trim().toUpperCase();
+    if (leadState && leadState !== 'PA' && (touch === 1 || touch === 2)) {
+      console.log(`  held: ${p.email} is ${leadState}, touch ${touch} carries the PA ruling. Waiting on non-PA copy.`);
+      await sPatch(`mdrx_providers?id=eq.${p.id}`, { funnel_next_date: addDaysISO(30) });
+      continue;
+    }
     // A/B: a recycled lead's first touch leads with a fresh, approved news opener instead of repeating Touch 1.
     // A/B: a recycled lead's first touch LEADS with a fresh, approved news opener. The rest of
     // the designed email is unchanged, so it still carries the sources, buttons, and signature.

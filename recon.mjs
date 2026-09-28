@@ -165,3 +165,14 @@ if (WRITE) {
   await flushLog();
 }
 console.log(`\n${WRITE ? `wrote ${done} dossier${done === 1 ? '' : 's'}` : 'Nothing written. Add --write.'}`);
+
+// 24 Sep 2026. Recon ran twice a day from 12 Sep and wrote nothing for twelve days, and every run
+// showed green. Every physician failed with "credit balance is too low", study() threw, the loop
+// caught it and carried on, and the process still exited 0. Eric found out from a dossier count
+// that had not moved, which is not a monitor. A run that had work to do and did none of it is a
+// failed run and now says so, so the workflow goes red and the morning brief can see it.
+if (WRITE && queue.length && !done) {
+  console.error(`\nrecon: had ${queue.length} to study and wrote 0. Treating this as a failure.`);
+  console.error('recon: the usual cause is an empty Anthropic credit balance. Check Plans and Billing.');
+  process.exitCode = 1;
+}
