@@ -1043,7 +1043,10 @@ async function relayAppointments() {
 async function escalateUnreachable() {
   if (!SVC) return;
   let cases = [];
-  try { cases = await sbGet(`cases?select=*&schedule_status=in.(pending,unable)&unreachable_relayed=is.false`); }
+  // 28 Sep 2026: only when the office clicks "Can't reach patient". Fred Walker's attorney was told
+  // "can't reach your client" three hours after the office said it was still trying. "Still trying" is
+  // now handled by chaseScheduling(), which updates the attorney after the second 48-hour note.
+  try { cases = await sbGet(`cases?select=*&schedule_status=eq.unable&unreachable_relayed=is.false`); }
   catch (e) { console.error('unreachable: query failed: ' + e.message); return; }
   let sent = 0;
   for (const cs of cases) {
@@ -1067,6 +1070,85 @@ async function escalateUnreachable() {
     } catch (e) { console.error(`  unreachable case ${cs.id} failed: ${e.message}`); }
   }
   if (sent) console.log(`Unreachable-patient escalations: ${sent}.`);
+}
+
+// ── Scheduling chase: manage every accepted referral until it is scheduled ──
+// Eric, 28 Sep 2026: "we are supposed to manage it all the way through until it gets to the next step.
+// 48 hour follow ups on case scheduling", and on the wording: "be gracious and nice not stern".
+// Fred Walker sat five days after acceptance with nobody asking. Now: a friendly office note 48h after
+// acceptance and every 2 business days after (3 notes max, one-click buttons); the attorney gets an
+// update after the 2nd note if the office is still working on it; after the 3rd, a Needs you task lands
+// on Eric's board. Scheduled cases leave the chase (relayAppointments tells the attorney the date).
+const SCHED_CHASE_ENABLED = false; // switched on only once Eric approves the wording below
+const SCHED_CLOSED = ['duplicate', 'closed', 'declined', 'lost', 'cancelled', 'complete', 'completed'];
+async function chaseScheduling() {
+  if (!SVC || !SCHED_CHASE_ENABLED) return;
+  const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  if (et.getDay() === 0 || et.getDay() === 6) return; // business days only
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&provider_response=eq.accepted&sched_touches=lt.4&or=(schedule_status.is.null,schedule_status.neq.scheduled)`); }
+  catch (e) { console.error('scheduling chase: query failed: ' + e.message); return; }
+  let n = 0;
+  for (const cs of cases) {
+    try {
+      if (SCHED_CLOSED.includes(String(cs.status || '').toLowerCase())) continue;
+      const acceptedMs = Date.parse(cs.accepted_at || cs.updated_at || cs.created_at);
+      const dueMs = cs.sched_next_touch ? Date.parse(cs.sched_next_touch) : acceptedMs + 48 * 3600000;
+      if (!(dueMs <= Date.now())) continue;
+      const touch = (cs.sched_touches || 0) + 1;
+      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'your patient';
+      const firm = (((cs.notes || '').match(/Referring firm:\s*([^|]+)/) || [])[1] || '').trim() || 'the referring attorney';
+
+      if (touch >= 4) {
+        // Three friendly notes and still nothing on the calendar: Eric steps in.
+        const open = await sbGet(`hq_tasks?select=id&case_id=eq.${cs.id}&status=neq.Done&name=ilike.*not%20scheduled*`);
+        if (!open.length) await sbPost('hq_tasks', { grp: 'MDconcierge ops', name: `${patient} (${firm}) not scheduled after 3 follow-ups`,
+          status: 'Needs you', assignee: 'eric', case_id: cs.id, due: new Date().toISOString().slice(0, 10),
+          note: `Referral ${cs.case_id}. Accepted ${new Date(acceptedMs).toDateString()}. The office has had 3 scheduling notes with no appointment yet.` });
+        await sbPatch(`cases?id=eq.${cs.id}`, { sched_touches: touch, sched_next_touch: null });
+        await logAudit(cs.id, 'schedule_chase', 'handed to Eric after 3 notes');
+        n++; continue;
+      }
+
+      // The office: the same people the referral itself went to.
+      const provs = cs.routed_provider_id ? await sbGet(`providers?select=*&id=eq.${cs.routed_provider_id}`) : [];
+      const prov = provs[0];
+      const contacts = prov ? await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&or=(provider_id.eq.${cs.routed_provider_id},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`) : [];
+      const recipients = (contacts || []).map(c => c.email).filter(e => e && /@/.test(e));
+      const office = (prov && prov.doctor_name) ? `${prov.doctor_name}'s office` : "the provider's office";
+      if (recipients.length) {
+        const text = touch < 3
+          ? `Hi,\n\nThank you again for taking on ${patient}, referred by ${firm}. We wanted to see how scheduling is going. If ${patient} is on the calendar, one click below lets us know and we will pass the good news along to the attorney.\n\nAnd if you have had any trouble reaching ${patient}, just reply with the number you have been trying and we will happily track down a better one from the attorney.\n\nThank you so much,\nEric Weiscarger, MDconcierge`
+          : `Hi,\n\nI know how busy things get, so just a gentle note on ${patient}. Whenever you have a moment, one click below lets us know where scheduling stands, or feel free to reply if anything is holding it up and we will gladly help.\n\nThank you again,\nEric Weiscarger, MDconcierge`;
+        const btns = [];
+        if (cs.accept_token) {
+          const link = 'https://mdconcierge.net/respond.html?t=' + cs.accept_token;
+          btns.push({ label: 'Scheduled', href: link + '&a=scheduled', color: '#2ecc8a', text: '#06351f' });
+          btns.push({ label: 'Still working on it', href: link + '&a=pending', color: '#EEF4FC', text: '#14213D' });
+          btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#EEF4FC', text: '#14213D' });
+        }
+        btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
+        await sendMail(recipients.join(', '), `Scheduling update: referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'nudge' });
+      }
+      // After the second note, if the office is still working on it, the attorney hears where it stands.
+      if (touch === 2 && cs.schedule_status !== 'unable') {
+        const emails = await resolveOwnerEmails(cs, 'attorney');
+        if (emails.length) {
+          let first = '';
+          if (cs.attorney_id) { try { first = ((await sbGet(`attorneys?select=first_name&id=eq.${cs.attorney_id}`))[0] || {}).first_name || ''; } catch (e) {} }
+          const acc = new Date(acceptedMs).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'America/New_York' });
+          const Office = office.charAt(0).toUpperCase() + office.slice(1);
+          const text = `Hi${first ? ' ' + first : ''},\n\nA quick update on ${patient}. ${Office} accepted the referral on ${acc} and is working on getting ${patient} on the schedule. If you happen to have a better phone number or a good time to reach ${patient}, just reply here and we will pass it right along to the office.\n\nThanks so much,\nEric`;
+          await sendMail(emails.join(', '), `Scheduling update on ${patient} (${cs.case_id})`, text,
+            emailHtml(text, [mailtoBtn('Reply with a better number', `RE ${cs.case_id} scheduling`, `Hello,\n\nBest number for ${patient}: \n\n`)], caseFooter(cs.case_id)), { kind: 'nudge' });
+        }
+      }
+      await sbPatch(`cases?id=eq.${cs.id}`, { sched_touches: touch, sched_next_touch: addBusinessDays(2), accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS) });
+      await logAudit(cs.id, 'schedule_chase', `note ${touch} to office${recipients.length ? '' : ' (no office email on file)'}`);
+      n++;
+    } catch (e) { console.error(`  scheduling chase case ${cs.id} failed: ${e.message}`); }
+  }
+  if (n) console.log(`Scheduling chase: ${n} case(s) moved.`);
 }
 
 // ── Phase E: email artifact requests to the holder (records/bills/narratives — tracking only, never the doc) ──
@@ -2181,6 +2263,7 @@ async function main() {
   await confirmNetworkRequestScheduled();  // confirm to a provider referrer once scheduled (+ who's treating)
   await relayTreatingProvider();
   await escalateUnreachable();
+  await chaseScheduling();
   await emailArtifactRequests();
   await handleEvents();
   await notifyCaseRequests();
