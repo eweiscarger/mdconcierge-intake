@@ -188,9 +188,24 @@ Return ONLY: {"sentiment":"...","hot":true|false,"intent":"interested"|"ready"|"
     return { sentiment: s, hot: !!o.hot || !!intent, intent, draft: (o.draft || '').trim(), proposedTime: String(o.proposed_time || '').trim() };
   } catch (e) {
     console.error('analyze failed: ' + e.message);
+    // Counted, so the end of the run can say so and alert. The safe default below is still right:
+    // it must never auto-suppress or auto-route on a failure. What was wrong was staying silent
+    // about it, which let a physician's "How about 10:00EST?" pass through as an empty string.
+    aiFailures++;
     return { sentiment: 'workable', hot: false, intent: null, draft: '', proposedTime: '' }; // safe default: surfaced to Eric, no auto-routing side effects beyond flag
   }
 }
+
+// Eric, 29 Sep 2026: "why is nobody scheduling that?" Amanda Dowdy wrote "How about 10:00EST?" and
+// nothing booked it, because analyzeAndDraft() had died on an Anthropic credit error and returned
+// its empty default, so proposedTime was '' and the auto-booker never fired. The same silence gave
+// every one of 53 pending drafts an empty draft_reply and hot=false. The run then printed "80
+// scanned, 1 new draft, 1 contact routed" and exited 0, and GitHub showed a green tick.
+//
+// The bug was never the model failing. It was the model failing quietly. This counts it.
+// Declared here rather than at the top only because the anchors above are inside a function; it is
+// still initialised before main() runs, which is what matters. See the TDZ outage of 17-23 Sep.
+let aiFailures = 0;
 
 async function main() {
   // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
@@ -449,6 +464,15 @@ async function main() {
   } finally { lock.release(); }
   await client.logout();
   console.log(`MDRx inbox scan: ${scanned} scanned, ${created} new draft(s), ${routed} contact(s) routed.`);
+  // A run where the model never answered is not a successful run, whatever the counts say. Every
+  // reply it touched got no draft, no sentiment, no hot flag and no proposed time, which means a
+  // physician who named a time was heard as silence. Say it loudly and tell Eric.
+  if (aiFailures) {
+    const msg = `${aiFailures} message(s) were read but never analysed, so they carry no draft reply and no proposed time. `
+      + `Anything a physician asked for in them has been missed. The usual cause is the Anthropic API key being out of credit.`;
+    console.error(`MDRx inbox scan: AI DEGRADED. ${msg}`);
+    await alertFailure('mdrx-inbox-ai', msg);
+  }
 }
 
 // Notify Eric ONLY on a genuine (non-transient) failure, at most once per 3 hours.
