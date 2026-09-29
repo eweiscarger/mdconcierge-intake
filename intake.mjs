@@ -1135,7 +1135,7 @@ async function escalateUnreachable() {
 const COORDINATOR_EMAILS_ENABLED = true;   // Eric approved all COORD_COPY wording, 28 Sep 2026
 // The attorney's "the office accepted" and "the visit happened" notes (COORD_COPY.email.attyAccepted /
 // attyVisitSeen) are held until Eric approves that wording.
-const COORD_ATTY_UPDATES_ENABLED = false;
+const COORD_ATTY_UPDATES_ENABLED = true;   // Eric approved both notes, 28 Sep 2026: "Yes my god yes you have to notify"
 // Cases accepted (or created) before this date get a stage and a summary but are never touched, so
 // switching the coordinator on cannot wake up months-old test and archive cases.
 const COORD_ACTIVE_SINCE = '2026-09-01';
