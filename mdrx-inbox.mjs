@@ -102,7 +102,9 @@ async function bookProposedTime(prov, local, name, email) {
 
 // One model call: classify sentiment AND (when useful) draft a reply. Returns
 // { sentiment: 'workable'|'decline'|'optout', hot: bool, draft: string }.
-async function analyzeAndDraft(who, fromAddr, subject, body, isTeam) {
+// Exported so a backfill can redraft replies that were read while the model was down, using the
+// one prompt that already exists rather than a second copy of it that would drift from this one.
+export async function analyzeAndDraft(who, fromAddr, subject, body, isTeam) {
   const sys = `You are Eric Weiscarger's inbox agent for MDconcierge. Eric partners WITH the MDRx360 team to bring physicians into the MDRx Workers' Compensation Pharmacy Program.
 
 WHO IS WHO (get this right):
@@ -488,13 +490,23 @@ async function alertFailure(job, msg) {
   } catch (e) { console.error('alertFailure error: ' + e.message); }
 }
 
-main().catch(async e => {
-  const msg = String(e?.message || e);
-  if (/greeting|connection|timeout|econnreset|econnrefused|enotfound|socket|network/i.test(msg)) {
-    console.warn('Transient mail connection issue, skipping this run: ' + msg);
-    process.exit(0); // transient blip, no alert
-  }
-  console.error('Fatal: ' + (e?.stack || e));
-  await alertFailure('mdrx-inbox', msg);
-  process.exit(0); // we alert Eric ourselves; do not also trigger a GitHub failure email
-});
+// Same guard cadence.mjs already uses. Without it, importing anything from this file connects to
+// the mailbox and runs a full scan as a side effect, so a backfill script that wanted one function
+// would kick off the whole agent. Importing is now inert; it only runs when it IS the program.
+const isMain = (() => {
+  try { return process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href; }
+  catch { return false; }
+})();
+
+if (isMain) {
+  main().catch(async e => {
+    const msg = String(e?.message || e);
+    if (/greeting|connection|timeout|econnreset|econnrefused|enotfound|socket|network/i.test(msg)) {
+      console.warn('Transient mail connection issue, skipping this run: ' + msg);
+      process.exit(0); // transient blip, no alert
+    }
+    console.error('Fatal: ' + (e?.stack || e));
+    await alertFailure('mdrx-inbox', msg);
+    process.exit(0); // we alert Eric ourselves; do not also trigger a GitHub failure email
+  });
+}
