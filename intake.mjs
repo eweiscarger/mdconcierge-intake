@@ -733,7 +733,8 @@ async function notifyRoutedProviders() {
       const btns = [
         { label: '✅ Accept & view case', href: base + '&a=accept', color: '#2ecc8a', text: '#06351f' },
         { label: 'Decline', href: base + '&a=decline', color: '#e0556b', text: '#ffffff' },
-        statusBtn(stok),
+        // 28 Sep 2026: no statusBtn here. That link opens the ATTORNEY's case page; the office's own
+        // page is the accept link above.
         mailtoBtn('Reply to coordinate', `RE ${cs.case_id}`, `Hello, regarding referral ${cs.case_id}:\n\n`),
       ];
       // Portal setup rides along in this email rather than arriving as a second one seconds later.
@@ -745,6 +746,8 @@ async function notifyRoutedProviders() {
       await sendMail(to, subj, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'event', critical: true });
       await sbPatch(`cases?id=eq.${cs.id}`, { provider_notified: true, accept_token: token, accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS), followup_count: 0, next_checkin: addBusinessDays(2) });
       await logAudit(cs.id, 'provider_notified', `${prov.doctor_name} (${to})`);
+      try { await coordTimeline(cs.id, 'mdconcierge', 'referral_sent', COORD_COPY.timeline.referralSent({ office: provId ? coordOfficeName(prov.doctor_name) : (prov.doctor_name || 'the office') })); }
+      catch (e) { console.error(`  referral timeline ${cs.id} failed: ${e.message}`); }
       // Accounts for the other referral contacts are created quietly here; the setup button is in
       // the email above, and every email footer carries a portal link. No separate invitation.
       for (const rc of recipients.slice(1)) await ensurePortalLink('provider', provId, rc.email, rc.name, prov.practice_id);
@@ -768,7 +771,9 @@ async function followUpRouted() {
   if (!SVC) return;
   const nowIso = new Date().toISOString();
   let cases = [];
-  try { cases = await sbGet(`cases?select=*&status=eq.routed&provider_notified=is.true&followup_count=lt.3&next_checkin=lte.${nowIso}`); }
+  // Accepted referrals leave this "please review and accept" nudge: from acceptance on, the case
+  // coordinator's scheduling notes take over, and the office must never get both.
+  try { cases = await sbGet(`cases?select=*&status=eq.routed&provider_notified=is.true&followup_count=lt.3&next_checkin=lte.${nowIso}&accepted_at=is.null&or=(provider_response.is.null,provider_response.neq.accepted)`); }
   catch (e) { console.error('follow-up: query failed: ' + e.message); return; }
   console.log(`Follow-ups: ${cases.length} case(s) due.`);
   for (const cs of cases) {
@@ -789,6 +794,9 @@ async function followUpRouted() {
         }
         btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
         await sendMail(recipients.map(r => r.email).join(', '), `Following up — referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'nudge' });
+        // The case coordinator shows every nudge on the shared timeline.
+        try { await coordTimeline(cs.id, 'mdconcierge', `referral_nudge:${count}`, COORD_COPY.timeline.referralNudge({ office: coordOfficeName(prov.doctor_name) })); }
+        catch (e) { console.error(`  follow-up timeline ${cs.id} failed: ${e.message}`); }
       }
 
       if (count >= 3) {
@@ -921,6 +929,12 @@ async function resolveOwnerEmails(cs, owner) {
     return /@/.test(e) ? [e.toLowerCase()] : [];
   }
   if (owner === 'provider') {
+    if (!cs.routed_provider_id && cs.routed_practice_id) {
+      try {
+        const contacts = await sbGet(`contacts?select=email&receives_referrals=is.true&practice_id=eq.${cs.routed_practice_id}`);
+        return (contacts || []).map(c => c.email).filter(e => e && /@/.test(e));
+      } catch (e) { return []; }
+    }
     if (!cs.routed_provider_id) return [];
     try {
       const provs = await sbGet(`providers?select=*&id=eq.${cs.routed_provider_id}`); const prov = provs[0]; if (!prov) return [];
@@ -1031,6 +1045,14 @@ async function relayAppointments() {
       await sendMail(emails.join(', '), `Scheduled — ${patient} (${cs.case_id})`, text, emailHtml(text, [statusBtn(rStok), mailtoBtn('Reply', `RE ${cs.case_id}`, 'Hello,\n\n')], caseFooter(cs.case_id)), { kind: 'event', critical: true });
       await sbPatch(`cases?id=eq.${cs.id}`, { appt_relayed: true });
       await logAudit(cs.id, 'appointment_relayed', cs.appointment_at || null);
+      // Timeline: set_schedule_status writes "The office scheduled ..." itself; add it here only when the
+      // appointment came in some other way (e.g. entered from the dashboard).
+      try {
+        const x = await coordCtx(cs);
+        const recent = await sbGet(`case_timeline?select=id&case_id=eq.${cs.id}&kind=eq.scheduled&at=gte.${new Date(Date.now() - 3 * 86400000).toISOString()}&limit=1`);
+        if (!recent.length) await coordTimeline(cs.id, 'office', 'scheduled', COORD_COPY.timeline.officeScheduled(x));
+        await coordTimeline(cs.id, 'mdconcierge', 'appt_relayed', COORD_COPY.timeline.apptRelayed(x));
+      } catch (e) { console.error(`  relay timeline ${cs.id} failed: ${e.message}`); }
       sent++;
       console.log(`  relayed appointment to attorney for ${cs.case_id}`);
     } catch (e) { console.error(`  relay case ${cs.id} failed: ${e.message}`); }
@@ -1045,7 +1067,9 @@ async function escalateUnreachable() {
   let cases = [];
   // 28 Sep 2026: only when the office clicks "Can't reach patient". Fred Walker's attorney was told
   // "can't reach your client" three hours after the office said it was still trying. "Still trying" is
-  // now handled by chaseScheduling(), which updates the attorney after the second 48-hour note.
+  // now handled by coordinateCases(), which updates the attorney after the second 48-hour note.
+  // Once COORDINATOR_EMAILS_ENABLED flips, the coordinator sends the (gentler) attorney email for this
+  // too, so this job then only records the escalation and never sends a second one.
   try { cases = await sbGet(`cases?select=*&schedule_status=eq.unable&unreachable_relayed=is.false`); }
   catch (e) { console.error('unreachable: query failed: ' + e.message); return; }
   let sent = 0;
@@ -1060,6 +1084,11 @@ async function escalateUnreachable() {
         await sbPatch(`cases?id=eq.${cs.id}`, { unreachable_relayed: true, status: 'escalated', notes: (cs.notes || '') + ` | UNREACHABLE: ${office} can't reach patient to schedule — no attorney email to relay` });
         continue;
       }
+      if (COORDINATOR_EMAILS_ENABLED) {
+        await sbPatch(`cases?id=eq.${cs.id}`, { unreachable_relayed: true, status: 'escalated' });
+        await logAudit(cs.id, 'unreachable_escalated', `${cs.schedule_status} (attorney email sent by the coordinator)`);
+        continue;
+      }
       const why = cs.schedule_status === 'unable' ? `${office} has been unable to reach your client to schedule` : `${office} is trying to reach your client to schedule but hasn't connected yet`;
       const text = `Hello,\n\nA quick heads-up on referral ${cs.case_id}: ${why} (${patient}). Could you please ask ${patient} to call the office, or reply with the best phone number and time to reach them? We'd like to get this scheduled and keep the treatment moving.`;
       await sendMail(emails.join(', '), `Action needed — can't reach your client to schedule (${cs.case_id})`, text, emailHtml(text, [mailtoBtn('Reply with the best number', `RE ${cs.case_id} — scheduling`, `Hello,\n\nBest way to reach ${patient}:\n\n`)], caseFooter(cs.case_id)), { kind: 'nudge' });
@@ -1072,83 +1101,494 @@ async function escalateUnreachable() {
   if (sent) console.log(`Unreachable-patient escalations: ${sent}.`);
 }
 
-// ── Scheduling chase: manage every accepted referral until it is scheduled ──
-// Eric, 28 Sep 2026: "we are supposed to manage it all the way through until it gets to the next step.
-// 48 hour follow ups on case scheduling", and on the wording: "be gracious and nice not stern".
-// Fred Walker sat five days after acceptance with nobody asking. Now: a friendly office note 48h after
-// acceptance and every 2 business days after (3 notes max, one-click buttons); the attorney gets an
-// update after the 2nd note if the office is still working on it; after the 3rd, a Needs you task lands
-// on Eric's board. Scheduled cases leave the chase (relayAppointments tells the attorney the date).
-const SCHED_CHASE_ENABLED = false; // switched on only once Eric approves the wording below
-const SCHED_CLOSED = ['duplicate', 'closed', 'declined', 'lost', 'cancelled', 'complete', 'completed'];
-async function chaseScheduling() {
-  if (!SVC || !SCHED_CHASE_ENABLED) return;
-  const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  if (et.getDay() === 0 || et.getDay() === 6) return; // business days only
-  let cases = [];
-  try { cases = await sbGet(`cases?select=*&provider_response=eq.accepted&sched_touches=lt.4&or=(schedule_status.is.null,schedule_status.neq.scheduled)`); }
-  catch (e) { console.error('scheduling chase: query failed: ' + e.message); return; }
-  let n = 0;
-  for (const cs of cases) {
-    try {
-      if (SCHED_CLOSED.includes(String(cs.status || '').toLowerCase())) continue;
-      const acceptedMs = Date.parse(cs.accepted_at || cs.updated_at || cs.created_at);
-      const dueMs = cs.sched_next_touch ? Date.parse(cs.sched_next_touch) : acceptedMs + 48 * 3600000;
-      if (!(dueMs <= Date.now())) continue;
-      const touch = (cs.sched_touches || 0) + 1;
-      const patient = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || 'your patient';
-      const firm = (((cs.notes || '').match(/Referring firm:\s*([^|]+)/) || [])[1] || '').trim() || 'the referring attorney';
+// ══ CASE COORDINATOR ═══════════════════════════════════════════════════════════════════════════
+// Eric, 28 Sep 2026: "we are supposed to manage it all the way through until it gets to the next step
+// ... emails are part of it but you are a case coordinator", "this is for every case - i should not
+// ever have to intervene like this again", and on tone: "be gracious and nice not stern".
+//
+// A referral accepted on 21 Sep had the office click "Pending patient contact"
+// on 23 Sep, and then nothing happened for five days. coordinateCases() runs every cycle and owns the
+// stage of EVERY open case, so no case can sit silent again:
+//
+//   referred    routed, not yet accepted. Waiting on the office. followUpRouted() does the nudging
+//               and now writes a timeline line each time.
+//   scheduling  accepted, no appointment. 48h after acceptance, then every 2 business days, up to 3
+//               touches: a request on the office's referral page, a timeline line both sides see and a
+//               short doorbell email with the Scheduled / Still working on it / Can't reach buttons.
+//               After touch 2 the attorney is asked, kindly, for a better number. Two business days
+//               after touch 3 with still no appointment, a Needs you task lands on Eric's board.
+//               "Can't reach patient" moves the wait to the attorney's office instead.
+//   scheduled   appointment on the calendar. Waiting on nobody until the visit date.
+//               One business day after the visit we ask the office to confirm it went ahead, same
+//               48h / 3-touch / Needs you pattern.
+//   seen        the office confirmed the visit.
+//   records     seen, with records or case details still outstanding (the existing gap and artifact
+//               chases do that work; the coordinator only reports it).
+//   closed      the case is closed.
+//
+// Every step writes coord_stage / coord_waiting_on / coord_next_at / coord_summary on the case and a
+// line on case_timeline, which the attorney's status page and the office's referral page both show.
+//
+// COORDINATOR_EMAILS_ENABLED = false: stages, timeline lines and in-platform requests still happen,
+// so the coordinator can be watched safely, but NO email goes out and NO hq_task is created. Eric
+// approves the wording in COORD_COPY below before this flips.
+const COORDINATOR_EMAILS_ENABLED = true;   // Eric approved all COORD_COPY wording, 28 Sep 2026
+// The attorney's "the office accepted" and "the visit happened" notes (COORD_COPY.email.attyAccepted /
+// attyVisitSeen) are held until Eric approves that wording.
+const COORD_ATTY_UPDATES_ENABLED = false;
+// Cases accepted (or created) before this date get a stage and a summary but are never touched, so
+// switching the coordinator on cannot wake up months-old test and archive cases.
+const COORD_ACTIVE_SINCE = '2026-09-01';
+const COORD_MAX_TOUCHES = 3;
+const COORD_SKIP = ['duplicate', 'declined', 'archived', 'lost', 'cancelled', 'canceled'];
+const COORD_DONE = ['closed', 'complete', 'completed'];
 
-      if (touch >= 4) {
-        // Three friendly notes and still nothing on the calendar: Eric steps in.
-        const open = await sbGet(`hq_tasks?select=id&case_id=eq.${cs.id}&status=neq.Done&name=ilike.*not%20scheduled*`);
-        if (!open.length) await sbPost('hq_tasks', { grp: 'MDconcierge ops', name: `${patient} (${firm}) not scheduled after 3 follow-ups`,
-          status: 'Needs you', assignee: 'eric', case_id: cs.id, due: new Date().toISOString().slice(0, 10),
-          note: `Referral ${cs.case_id}. Accepted ${new Date(acceptedMs).toDateString()}. The office has had 3 scheduling notes with no appointment yet.` });
-        await sbPatch(`cases?id=eq.${cs.id}`, { sched_touches: touch, sched_next_touch: null });
-        await logAudit(cs.id, 'schedule_chase', 'handed to Eric after 3 notes');
-        n++; continue;
-      }
+// ── ALL COORDINATOR WORDING, IN ONE PLACE FOR ERIC TO REVIEW ────────────────────────────────────
+// x.pt      patient as first name + last initial ("Fred W."). Full names never appear here.
+// x.office  "Dr. Smith's office" (or the practice name when routed to a practice)
+// x.Office  the same, capitalised for the start of a sentence
+// x.ref     case reference, x.firm referring firm, x.attyFirst attorney first name
+// x.appt    "Oct 2 at 10:00 AM", x.day "Oct 2", x.acceptedLong "September 21"
+// Emails carry no sign-off in the body: sendMail() appends Eric's signature block
+// ("Warm regards, Eric Weiscarger, Founder, MDconcierge") to every one of them.
+const COORD_COPY = {
+  // One line on both case pages and Eric's dashboard: where the case stands right now.
+  summary: {
+    referredPending:  x => `We are lining up the right office for ${x.pt}.`,
+    referred:         x => `The referral is with ${x.office}, and we are waiting for them to accept it.`,
+    cannot:           x => `${x.Office} is not able to take this one, so we are finding the right fit for ${x.pt}.`,
+    scheduling:       x => `${x.Office} accepted the referral and is working on getting ${x.pt} scheduled.`,
+    schedulingUnable: x => `${x.Office} has not been able to reach ${x.pt} yet, so we have asked the attorney's office for a good number or time to call.`,
+    schedulingEric:   x => `Eric is personally working with ${x.office} to get ${x.pt} scheduled.`,
+    scheduled:        x => x.appt ? `${x.pt} is scheduled with ${x.office} for ${x.appt}.` : `${x.pt} is scheduled with ${x.office}.`,
+    visitConfirming:  x => `We are confirming with ${x.office} that ${x.pt}'s visit on ${x.day} went ahead.`,
+    visitEric:        x => `Eric is personally confirming ${x.pt}'s visit on ${x.day} with ${x.office}.`,
+    seen:             x => x.day ? `${x.pt} was seen by ${x.office} on ${x.day}.` : `${x.pt} was seen by ${x.office}.`,
+    records:          x => `${x.pt} has been seen, and we are gathering the records and details still outstanding.`,
+    closed:           x => `This case is complete. Thank you for trusting MDconcierge with it.`,
+  },
+  // Lines on the shared case timeline (newest first on both pages).
+  timeline: {
+    referralSent:   x => `We sent the referral to ${x.office}.`,
+    referralNudge:  x => `We sent ${x.office} a friendly reminder about the new referral.`,
+    accepted:       x => `${x.Office} accepted the referral.`,
+    schedTouch:     (x, n) => n === 1 ? `We asked ${x.office} for a scheduling update.` : `We asked ${x.office} again for a scheduling update.`,
+    attyContactAsk: x => `We asked the attorney's office for a good number or time to reach ${x.pt}.`,
+    schedHandoff:   x => `Eric is personally reaching out to ${x.office} to help get ${x.pt} scheduled.`,
+    officeScheduled:x => x.appt ? `The office scheduled ${x.pt} for ${x.appt}.` : `The office scheduled ${x.pt}.`,
+    apptRelayed:    x => `We shared the appointment with the attorney's office.`,
+    visitTouch:     x => `We asked ${x.office} to confirm ${x.pt}'s visit on ${x.day}.`,
+    visitHandoff:   x => `Eric is personally confirming the visit with ${x.office}.`,
+    missedNote:     x => `We let the attorney's office know about the missed visit and asked for a good time to reach ${x.pt}.`,
+  },
+  // Requests posted on the other side's page, labelled "From MDconcierge".
+  request: {
+    schedTouch: (x, n) => [
+      `Thank you so much for taking on ${x.pt}. When you have a moment, could you let us know where scheduling stands? One tap below is all it takes.`,
+      `Thank you again for your help with ${x.pt}. If reaching ${x.pt} has been tricky, tap Can't reach patient and we will gladly ask the attorney's office for a better number.`,
+      `We know how busy the front desk gets. Whenever you have a moment, a quick tap below on ${x.pt}'s scheduling would be a big help.`,
+    ][Math.min(n, 3) - 1],
+    attyContact: x => `${x.Office} is working on getting ${x.pt} on the schedule. If you have a better phone number or a good time to reach ${x.pt}, we would be grateful if you could share it below, and we will pass it right along.`,
+    attyUnable:  x => `${x.Office} has not been able to reach ${x.pt} to schedule. If you have a better phone number or a good time to reach ${x.pt}, we would be grateful if you could share it below, and we will pass it right along.`,
+    attyMissed:  x => `${x.pt} was not able to make the visit on ${x.day}, and ${x.office} is working on a new time. If you have a good number or time to reach ${x.pt}, we would be grateful if you could share it below.`,
+    visitTouch: (x, n) => [
+      `Were you able to see ${x.pt} on ${x.day}? One tap below lets us know. Thank you for everything you do.`,
+      `Thank you again for caring for ${x.pt}. When you have a moment, could you let us know whether the visit on ${x.day} went ahead?`,
+      `Whenever you have a moment, a quick tap below on ${x.pt}'s visit on ${x.day} would be a big help. Thank you.`,
+    ][Math.min(n, 3) - 1],
+  },
+  // Doorbell emails. Short; the page is where the work happens.
+  email: {
+    schedTouchSubject: x => `Scheduling for ${x.pt} (${x.ref})`,
+    schedTouch: (x, n) => [
+      `Hi,\n\nThank you so much for taking on ${x.pt}. When you have a moment, could you let us know where scheduling stands? One tap below is all it takes, and we will pass the news along to the attorney's office.\n\nIf reaching ${x.pt} has been tricky, just tap Can't reach patient and we will happily find a better number for you.`,
+      `Hi,\n\nThank you again for your help with ${x.pt}. Whenever it is convenient, one tap below lets us know where scheduling stands. If anything is holding it up, just reply and we will gladly help.`,
+      `Hi,\n\nI know how busy the front desk gets, so here is one more gentle note about ${x.pt}. A quick tap below is all we need, and we are always happy to help if something is in the way.`,
+    ][Math.min(n, 3) - 1],
+    attyContactSubject: x => `Scheduling update on ${x.pt} (${x.ref})`,
+    attyContact: x => `Hi${x.attyFirst ? ' ' + x.attyFirst : ''},\n\nA quick update on ${x.pt}. ${x.Office} accepted the referral on ${x.acceptedLong} and is working on getting ${x.pt} on the schedule. If you happen to have a better phone number or a good time to reach ${x.pt}, just reply here or add it on the case page and we will pass it right along.\n\nThank you so much for your help.`,
+    attyUnableSubject: x => `Reaching ${x.pt} (${x.ref})`,
+    attyUnable: x => `Hi${x.attyFirst ? ' ' + x.attyFirst : ''},\n\n${x.Office} has been trying to reach ${x.pt} to schedule the first visit and has not been able to connect yet. If you have a better phone number or a good time to reach ${x.pt}, just reply here or add it on the case page and we will pass it right along to the office.\n\nThank you so much for your help.`,
+    attyMissedSubject: x => `${x.pt}'s visit on ${x.day} (${x.ref})`,
+    attyMissed: x => `Hi${x.attyFirst ? ' ' + x.attyFirst : ''},\n\n${x.Office} let us know that ${x.pt} was not able to make the visit on ${x.day}, and they are working on a new time. If you have a good number or time to reach ${x.pt}, just reply here or add it on the case page and we will pass it right along.\n\nThank you so much.`,
+    attyAcceptedSubject: x => `${x.pt} is with ${x.office} (${x.ref})`,
+    attyAccepted: x => `Hi${x.attyFirst ? ' ' + x.attyFirst : ''},\n\nGood news on ${x.pt}. ${x.Office} has accepted the referral and will be reaching out to ${x.pt} to schedule the first visit. We will let you know as soon as it is on the calendar, and you can follow along on the case page anytime.\n\nThank you so much for the referral.`,
+    attyVisitSeenSubject: x => `${x.pt} was seen on ${x.day} (${x.ref})`,
+    attyVisitSeen: x => `Hi${x.attyFirst ? ' ' + x.attyFirst : ''},\n\nGood news on ${x.pt}. ${x.Office} let us know ${x.pt} was seen on ${x.day}. We will keep you posted as the records and next steps come together, and you can follow along on the case page anytime.\n\nThank you so much.`,
+    visitTouchSubject: x => `${x.pt}'s visit on ${x.day} (${x.ref})`,
+    visitTouch: (x, n) => [
+      `Hi,\n\n${x.pt} was scheduled to see you on ${x.day}. When you have a moment, could you let us know whether the visit went ahead? One tap below is all it takes, and it helps us get the records moving for the attorney's office.\n\nThank you so much.`,
+      `Hi,\n\nThank you again for your help with ${x.pt}. Whenever it is convenient, one tap below lets us know whether the visit on ${x.day} went ahead.`,
+      `Hi,\n\nI know how busy things get, so here is one more gentle note about ${x.pt}'s visit on ${x.day}. A quick tap below is all we need.`,
+    ][Math.min(n, 3) - 1],
+    // Button labels
+    btnScheduled: 'Scheduled',
+    btnStillWorking: 'Still working on it',
+    btnCantReach: "Can't reach patient",
+    btnOpenReferral: 'Open the referral page',   // opens the accepted case (accept is idempotent)
+    btnVisitSeen: 'Yes, the visit went ahead',
+    btnVisitMissed: 'The visit did not happen',
+    btnOpenCase: 'Open the case page',
+    btnBetterNumber: 'Reply with a better number',
+  },
+  // Eric's board (only when COORDINATOR_EMAILS_ENABLED).
+  task: {
+    schedName:  x => `${x.pt} (${x.firm}) not scheduled after 3 notes`,
+    schedNote:  x => `Referral ${x.ref}. ${x.Office} accepted it on ${x.acceptedLong} and has had 3 friendly scheduling notes with no appointment yet. A personal call to the office would help.`,
+    unableName: x => `${x.pt} (${x.firm}): no better number from the attorney yet`,
+    unableNote: x => `Referral ${x.ref}. ${x.Office} could not reach ${x.pt}, and we asked the attorney's office for a better number 3 business days ago with no answer yet. A personal call to the attorney's office would help.`,
+    visitName:  x => `${x.pt} (${x.firm}) visit on ${x.day} not confirmed`,
+    visitNote:  x => `Referral ${x.ref}. ${x.Office} has had 3 notes asking whether ${x.pt}'s visit on ${x.day} went ahead, with no answer yet. A personal call to the office would help.`,
+  },
+};
+// "Fred W." at the end of a sentence would otherwise print "Fred W.."
+function coordTidy(s) { return String(s || '').replace(/\.\./g, '.'); }
 
-      // The office: the same people the referral itself went to.
-      const provs = cs.routed_provider_id ? await sbGet(`providers?select=*&id=eq.${cs.routed_provider_id}`) : [];
-      const prov = provs[0];
-      const contacts = prov ? await sbGet(`contacts?select=name,email,role&receives_referrals=is.true&or=(provider_id.eq.${cs.routed_provider_id},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`) : [];
-      const recipients = (contacts || []).map(c => c.email).filter(e => e && /@/.test(e));
-      const office = (prov && prov.doctor_name) ? `${prov.doctor_name}'s office` : "the provider's office";
-      if (recipients.length) {
-        const text = touch < 3
-          ? `Hi,\n\nThank you again for taking on ${patient}, referred by ${firm}. We wanted to see how scheduling is going. If ${patient} is on the calendar, one click below lets us know and we will pass the good news along to the attorney.\n\nAnd if you have had any trouble reaching ${patient}, just reply with the number you have been trying and we will happily track down a better one from the attorney.\n\nThank you so much,\nEric Weiscarger, MDconcierge`
-          : `Hi,\n\nI know how busy things get, so just a gentle note on ${patient}. Whenever you have a moment, one click below lets us know where scheduling stands, or feel free to reply if anything is holding it up and we will gladly help.\n\nThank you again,\nEric Weiscarger, MDconcierge`;
-        const btns = [];
-        if (cs.accept_token) {
-          const link = 'https://mdconcierge.net/respond.html?t=' + cs.accept_token;
-          btns.push({ label: 'Scheduled', href: link + '&a=scheduled', color: '#2ecc8a', text: '#06351f' });
-          btns.push({ label: 'Still working on it', href: link + '&a=pending', color: '#EEF4FC', text: '#14213D' });
-          btns.push({ label: "Can't reach patient", href: link + '&a=unable', color: '#EEF4FC', text: '#14213D' });
-        }
-        btns.push(mailtoBtn('Reply with an update', `UPDATE ${cs.case_id}`, `Hello, an update on referral ${cs.case_id}:\n\n`));
-        await sendMail(recipients.join(', '), `Scheduling update: referral ${cs.case_id}`, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'nudge' });
-      }
-      // After the second note, if the office is still working on it, the attorney hears where it stands.
-      if (touch === 2 && cs.schedule_status !== 'unable') {
-        const emails = await resolveOwnerEmails(cs, 'attorney');
-        if (emails.length) {
-          let first = '';
-          if (cs.attorney_id) { try { first = ((await sbGet(`attorneys?select=first_name&id=eq.${cs.attorney_id}`))[0] || {}).first_name || ''; } catch (e) {} }
-          const acc = new Date(acceptedMs).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'America/New_York' });
-          const Office = office.charAt(0).toUpperCase() + office.slice(1);
-          const text = `Hi${first ? ' ' + first : ''},\n\nA quick update on ${patient}. ${Office} accepted the referral on ${acc} and is working on getting ${patient} on the schedule. If you happen to have a better phone number or a good time to reach ${patient}, just reply here and we will pass it right along to the office.\n\nThanks so much,\nEric`;
-          await sendMail(emails.join(', '), `Scheduling update on ${patient} (${cs.case_id})`, text,
-            emailHtml(text, [mailtoBtn('Reply with a better number', `RE ${cs.case_id} scheduling`, `Hello,\n\nBest number for ${patient}: \n\n`)], caseFooter(cs.case_id)), { kind: 'nudge' });
-        }
-      }
-      await sbPatch(`cases?id=eq.${cs.id}`, { sched_touches: touch, sched_next_touch: addBusinessDays(2), accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS) });
-      await logAudit(cs.id, 'schedule_chase', `note ${touch} to office${recipients.length ? '' : ' (no office email on file)'}`);
-      n++;
-    } catch (e) { console.error(`  scheduling chase case ${cs.id} failed: ${e.message}`); }
+// ── Time, in Eric's time zone ──
+const COORD_TZ = 'America/New_York';
+const _coordFmt = new Intl.DateTimeFormat('en-US', { timeZone: COORD_TZ, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short' });
+function etParts(d) { const o = {}; for (const p of _coordFmt.formatToParts(d)) o[p.type] = p.value; return { y: +o.year, m: +o.month, d: +o.day, h: (+o.hour) % 24, mi: +o.minute, wd: o.weekday }; }
+function isBizDayET(d) { const wd = etParts(d).wd; return wd !== 'Sat' && wd !== 'Sun'; }
+function addBusinessDaysET(from, n) { const d = new Date(from.getTime()); let added = 0; while (added < n) { d.setTime(d.getTime() + 86400000); if (isBizDayET(d)) added++; } return d; }
+function etToDate(y, mo, d, h, mi) { const guess = Date.UTC(y, mo - 1, d, h, mi); const p = etParts(new Date(guess)); const off = Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi) - guess; return new Date(guess - off); }
+// appointment_at is stored as the office typed it on respond.html ("10/2/2026 at 10:00 AM"); an ISO
+// timestamp is accepted too. Returns epoch ms, or null when it cannot be read.
+function parseApptET(s) {
+  const t = String(s || '').trim(); if (!t) return null;
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+at\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm]))?/);
+  if (m) {
+    let h = 12, mi = 0;
+    if (m[4]) { h = (+m[4]) % 12 + (/p/i.test(m[6]) ? 12 : 0); mi = +m[5]; }
+    return etToDate(+m[3], +m[1], +m[2], h, mi).getTime();
   }
-  if (n) console.log(`Scheduling chase: ${n} case(s) moved.`);
+  const ms = Date.parse(t); return isNaN(ms) ? null : ms;
+}
+function fmtDayET(ms) { return ms ? new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: COORD_TZ }) : ''; }
+function fmtApptET(s) {
+  const ms = parseApptET(s); if (!ms) return String(s || '');
+  const hasTime = /\d{1,2}:\d{2}/.test(String(s));
+  return fmtDayET(ms) + (hasTime ? ' at ' + new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: COORD_TZ }) : '');
+}
+function coordApptKey(s) { return String(s || '').replace(/[^0-9A-Za-z]/g, '').slice(0, 40) || 'none'; }
+function coordActive(cs) { const t = Date.parse(cs.accepted_at || cs.created_at || ''); return !isNaN(t) && t >= Date.parse(COORD_ACTIVE_SINCE); }
+
+// ── Data helpers ──
+async function sbInsert(path, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'POST', headers: { apikey: SVC, Authorization: `Bearer ${SVC}`, 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`POST ${path} ${r.status}: ${await r.text()}`);
+  const j = await r.json(); return Array.isArray(j) ? j[0] : j;
+}
+async function sbPatchCount(path, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'PATCH', headers: { apikey: SVC, Authorization: `Bearer ${SVC}`, 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`PATCH ${path} ${r.status}: ${await r.text()}`);
+  const j = await r.json(); return Array.isArray(j) ? j.length : 0;
+}
+async function coordTimeline(caseId, actor, kind, text, forAtty = true, forOffice = true, at = null) {
+  const row = { case_id: caseId, actor, kind, text: coordTidy(text), for_attorney: !!forAtty, for_office: !!forOffice };
+  if (at) row.at = at;
+  return await sbInsert('case_timeline', row);
+}
+// Coordinator requests are born notified: the coordinator rings its own doorbell (or, while emails are
+// off, deliberately none), so notifyCaseRequests() must never send its generic cross-party email.
+async function coordRequest(caseId, toRole, type, message) {
+  return await sbInsert('case_requests', { case_id: caseId, from_role: 'mdconcierge', to_role: toRole, request_type: type, message: coordTidy(message), status: 'open', notified_at: new Date().toISOString() });
+}
+const _coordOfficeCache = new Map();
+async function coordOffice(cs) {
+  // Same people the referral itself went to (followUpRouted's lookup), plus practice-routed cases.
+  const key = cs.routed_provider_id ? 'p' + cs.routed_provider_id : 'r' + (cs.routed_practice_id || '');
+  if (_coordOfficeCache.has(key)) return _coordOfficeCache.get(key);
+  let office = 'the office', recipients = [];
+  try {
+    if (cs.routed_provider_id) {
+      const prov = (await sbGet(`providers?select=id,doctor_name,practice_id&id=eq.${cs.routed_provider_id}`))[0];
+      if (prov) {
+        if (prov.doctor_name) office = coordOfficeName(prov.doctor_name);
+        const contacts = await sbGet(`contacts?select=email&receives_referrals=is.true&or=(provider_id.eq.${prov.id},and(provider_id.is.null,practice_id.eq.${prov.practice_id}))`);
+        recipients = (contacts || []).map(c => c.email).filter(e => e && /@/.test(e));
+      }
+    } else if (cs.routed_practice_id) {
+      const prac = (await sbGet(`practices?select=name&id=eq.${cs.routed_practice_id}`))[0];
+      if (prac && prac.name) office = prac.name;
+      const contacts = await sbGet(`contacts?select=email&receives_referrals=is.true&practice_id=eq.${cs.routed_practice_id}`);
+      recipients = (contacts || []).map(c => c.email).filter(e => e && /@/.test(e));
+    }
+  } catch (e) { /* a lookup failure only costs the office name this run */ }
+  const out = { office, recipients: [...new Set(recipients.map(e => e.toLowerCase()))] };
+  _coordOfficeCache.set(key, out);
+  return out;
+}
+function coordOfficeName(doctorName) {
+  const raw = String(doctorName || '').trim(); if (!raw) return 'the office';
+  const i = raw.indexOf(','); const name = (i > 0 ? raw.slice(0, i) : raw).replace(/^dr\.?\s+/i, '').trim();
+  const creds = (i > 0 ? raw.slice(i + 1) : '').replace(/\./g, '').toUpperCase();
+  const dr = /^dr\.?\s/i.test(raw) || /\b(MD|DO|DPM|DC|DPT|PHD|PSYD)\b/.test(creds);
+  return `${dr ? 'Dr. ' : ''}${name}'s office`;
+}
+function coordPatient(cs) {
+  const f = String(cs.patient_first || '').trim(), l = String(cs.patient_last || '').trim();
+  return f ? (l ? `${f} ${l.charAt(0).toUpperCase()}.` : f) : 'the patient';
+}
+async function coordCtx(cs) {
+  const { office, recipients } = await coordOffice(cs);
+  const acc = Date.parse(cs.accepted_at || '');
+  const apptMs = parseApptET(cs.appointment_at);
+  return {
+    pt: coordPatient(cs), office, Office: office.charAt(0).toUpperCase() + office.slice(1), recipients,
+    ref: cs.case_id || '', firm: (((cs.notes || '').match(/Referring firm:\s*([^|]+)/) || [])[1] || '').trim() || 'the referring attorney',
+    appt: cs.appointment_at ? fmtApptET(cs.appointment_at) : '', day: fmtDayET(apptMs), apptMs,
+    acceptedLong: isNaN(acc) ? 'acceptance' : new Date(acc).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: COORD_TZ }),
+    attyFirst: '',
+  };
+}
+// Write the stage only when something actually changed.
+async function coordWrite(cs, s) {
+  const next = s.next ? new Date(s.next).toISOString() : null;
+  const summary = coordTidy(s.summary);
+  const sameNext = (next === null && !cs.coord_next_at) || (next !== null && cs.coord_next_at && Math.abs(Date.parse(cs.coord_next_at) - Date.parse(next)) < 60000);
+  if (cs.coord_stage === s.stage && cs.coord_waiting_on === s.waiting && cs.coord_summary === summary && sameNext) return;
+  await sbPatch(`cases?id=eq.${cs.id}`, { coord_stage: s.stage, coord_waiting_on: s.waiting, coord_next_at: next, coord_summary: summary });
+  Object.assign(cs, { coord_stage: s.stage, coord_waiting_on: s.waiting, coord_next_at: next, coord_summary: summary });
+}
+// Claim a scheduling touch before posting anything: only one run can move sched_touches from N.
+async function coordClaim(cs, touches, patch) {
+  const n = await sbPatchCount(`cases?id=eq.${cs.id}&sched_touches=eq.${touches}`, patch);
+  if (n) Object.assign(cs, patch);
+  return n > 0;
+}
+async function coordTask(cs, name, note) {
+  if (!COORDINATOR_EMAILS_ENABLED) return false;
+  const row = { grp: 'MDconcierge ops', name: coordTidy(name), status: 'Needs you', assignee: 'eric', due: new Date().toISOString().slice(0, 10), note: coordTidy(note) };
+  try {
+    const open = await sbGet(`hq_tasks?select=id&case_id=eq.${cs.id}&status=neq.Done&limit=1`);
+    if (open.length) return false;
+    await sbPost('hq_tasks', Object.assign({ case_id: cs.id }, row));
+  } catch (e) {
+    // hq_tasks without a case_id column: fall back to matching on the case reference in the note.
+    const open = await sbGet(`hq_tasks?select=id&status=neq.Done&note=ilike.*${encodeURIComponent(cs.case_id || '')}*&limit=1`);
+    if (open.length) return false;
+    await sbPost('hq_tasks', row);
+  }
+  await logAudit(cs.id, 'coord_task', name);
+  return true;
+}
+
+async function coordinateCases() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&or=(routed_provider_id.not.is.null,routed_practice_id.not.is.null)&order=id.asc`); }
+  catch (e) { console.error('coordinator: cases query failed: ' + e.message); return; }
+  cases = cases.filter(cs => !COORD_SKIP.includes(String(cs.status || '').toLowerCase()) && String(cs.provider_response || '').toLowerCase() !== 'declined');
+  if (!cases.length) return;
+  const tlBy = {}, reqBy = {};
+  let emailed = new Set();
+  try {
+    const ids = cases.map(c => c.id);
+    for (let i = 0; i < ids.length; i += 80) {
+      const rows = await sbGet(`case_timeline?select=id,case_id,at,actor,kind&case_id=in.(${ids.slice(i, i + 80).join(',')})&order=at.asc,id.asc`);
+      for (const r of rows) (tlBy[r.case_id] = tlBy[r.case_id] || []).push(r);
+    }
+    const reqs = await sbGet(`case_requests?select=id,case_id,to_role,request_type,created_at&from_role=eq.mdconcierge&status=eq.open`);
+    for (const r of reqs) (reqBy[r.case_id] = reqBy[r.case_id] || []).push(r);
+    if (COORDINATOR_EMAILS_ENABLED) {
+      const sinceIso = new Date(Date.now() - 4 * 86400000).toISOString();
+      emailed = new Set((await sbGet(`audit_log?select=detail&action=eq.coord_email&created_at=gte.${sinceIso}`)).map(r => r.detail));
+    }
+  } catch (e) { console.error('coordinator: timeline/requests query failed: ' + e.message); return; }
+  const now = Date.now(), biz = isBizDayET(new Date(now));
+  let moved = 0;
+  for (const cs of cases) {
+    try { moved += await coordinateOne(cs, tlBy[cs.id] || [], reqBy[cs.id] || [], emailed, now, biz); }
+    catch (e) { console.error(`  coordinator case ${cs.id} failed: ${e.message}`); }
+  }
+  console.log(`Coordinator: ${cases.length} open case(s) staged; ${moved} step(s) taken${COORDINATOR_EMAILS_ENABLED ? '' : ' (emails off)'}.`);
+}
+
+async function coordinateOne(cs, tl, openReqs, emailed, now, biz) {
+  const C = COORD_COPY;
+  const x = await coordCtx(cs);
+  const st = String(cs.status || '').toLowerCase();
+  const ss = String(cs.schedule_status || '').toLowerCase();
+  const active = coordActive(cs);
+  const has = k => tl.some(t => t.kind === k);
+  const lastAt = pred => { let m = 0; for (const t of tl) if (pred(t)) m = Math.max(m, Date.parse(t.at) || 0); return m; };
+  const add = async (kind, text, actor = 'mdconcierge', forAtty = true, forOffice = true, at = null) => { const row = await coordTimeline(cs.id, actor, kind, text, forAtty, forOffice, at); if (row) tl.push(row); return row; };
+  const openReq = (to, type) => openReqs.find(r => r.to_role === to && r.request_type === type);
+  const post = async (to, type, msg) => { if (openReq(to, type)) return null; const row = await coordRequest(cs.id, to, type, msg); if (row) openReqs.push(row); return row; };
+  let acted = 0;
+
+  if (COORD_DONE.includes(st)) { await coordWrite(cs, { stage: 'closed', waiting: 'none', next: null, summary: C.summary.closed(x) }); return 0; }
+  if (ss === 'cannot') { await coordWrite(cs, { stage: 'referred', waiting: 'mdconcierge', next: null, summary: C.summary.cannot(x) }); return 0; }
+  const accepted = String(cs.provider_response || '').toLowerCase() === 'accepted' || !!cs.accepted_at || ss === 'scheduled';
+  if (!accepted) {
+    await coordWrite(cs, cs.provider_notified
+      ? { stage: 'referred', waiting: 'office', next: cs.next_checkin || null, summary: C.summary.referred(x) }
+      : { stage: 'referred', waiting: 'mdconcierge', next: null, summary: C.summary.referredPending(x) });
+    return 0;
+  }
+  if (active && cs.accepted_at && !has('accepted')) await add('accepted', C.timeline.accepted(x), 'office', true, true, cs.accepted_at);
+
+  if (ss === 'scheduled') {
+    // ── Scheduled, then visit follow-through ──
+    const apptMs = x.apptMs;
+    const confirmed = tl.some(t => t.kind === 'visit_confirmed' && (!apptMs || Date.parse(t.at) >= apptMs - 12 * 3600000));
+    if (confirmed) {
+      let owner = null;
+      try {
+        const arts = await sbGet(`case_artifacts?select=holder&case_id=eq.${cs.id}&status=eq.requested&limit=1`);
+        const gaps = arts.length ? [] : await sbGet(`case_gaps?select=owner&case_id=eq.${cs.id}&status=in.(open,awaiting)&limit=1`);
+        const o = arts.length ? arts[0].holder : gaps.length ? gaps[0].owner : null;
+        owner = o ? (o === 'attorney' ? 'attorney' : 'office') : null;
+      } catch (e) {}
+      await coordWrite(cs, owner ? { stage: 'records', waiting: owner, next: null, summary: C.summary.records(x) }
+                                 : { stage: 'seen', waiting: 'none', next: null, summary: C.summary.seen(x) });
+    } else if (!apptMs || apptMs > now) {
+      await coordWrite(cs, { stage: 'scheduled', waiting: 'none', next: apptMs ? addBusinessDaysET(new Date(apptMs), 1) : null, summary: C.summary.scheduled(x) });
+    } else {
+      const key = coordApptKey(cs.appointment_at);
+      const isTouch = t => t.kind.startsWith(`visit_touch:${key}:`);
+      const n0 = tl.filter(isTouch).length;
+      const due = n0 === 0 ? addBusinessDaysET(new Date(apptMs), 1).getTime() : addBusinessDaysET(new Date(lastAt(isTouch)), 2).getTime();
+      if (n0 >= COORD_MAX_TOUCHES) {
+        let handed = has(`visit_handoff:${key}`);
+        if (!handed && active && COORDINATOR_EMAILS_ENABLED && biz && due <= now) {
+          await coordTask(cs, C.task.visitName(x), C.task.visitNote(x));
+          await add(`visit_handoff:${key}`, C.timeline.visitHandoff(x), 'mdconcierge', true, false);
+          handed = true; acted++;
+        }
+        await coordWrite(cs, handed ? { stage: 'scheduled', waiting: 'mdconcierge', next: null, summary: C.summary.visitEric(x) }
+                                    : { stage: 'scheduled', waiting: 'office', next: due, summary: C.summary.visitConfirming(x) });
+      } else {
+        let next = due;
+        if (active && biz && due <= now) {
+          const n = n0 + 1;
+          await post('provider', 'visit_confirmation', C.request.visitTouch(x, n));
+          await add(`visit_touch:${key}:${n}`, C.timeline.visitTouch(x));
+          next = addBusinessDaysET(new Date(now), 2).getTime(); acted++;
+        }
+        await coordWrite(cs, { stage: 'scheduled', waiting: 'office', next, summary: C.summary.visitConfirming(x) });
+      }
+    }
+  } else {
+    // ── Scheduling loop ──
+    // A visit the office reported as missed: tell the attorney once, kindly. (office_confirm_visit
+    // has already put the case back into scheduling with a fresh set of touches.)
+    const missedAt = lastAt(t => t.kind === 'visit_missed');
+    if (active && missedAt && !(lastAt(t => t.kind === 'atty_missed_note') > missedAt)) {
+      await post('attorney', 'client_contact', C.request.attyMissed(x));
+      await add('atty_missed_note', C.timeline.missedNote(x), 'mdconcierge', true, false);
+      acted++;
+    }
+    if (ss === 'unable') {
+      // The office can't reach the patient: the attorney's office owns that relationship, so the wait
+      // moves to them. No more office touches until someone gives the office something new to try.
+      const unableAt = lastAt(t => t.kind === 'unable') || 1;
+      if (active && !openReq('attorney', 'client_contact') && !(lastAt(t => t.kind === 'atty_unable_ask') >= unableAt)) {
+        await post('attorney', 'client_contact', C.request.attyUnable(x));
+        await add('atty_unable_ask', C.timeline.attyContactAsk(x));
+        acted++;
+      }
+      // Three business days with no answer from the attorney's office: Eric steps in. The marker line
+      // is visible to nobody; it only stops the task from being created twice.
+      const askedAt = lastAt(t => t.kind === 'atty_unable_ask');
+      const handDue = askedAt ? addBusinessDaysET(new Date(askedAt), 3).getTime() : 0;
+      if (active && askedAt && askedAt >= unableAt && COORDINATOR_EMAILS_ENABLED && biz && handDue <= now
+          && !(lastAt(t => t.kind === 'unable_handoff') >= askedAt)) {
+        await coordTask(cs, C.task.unableName(x), C.task.unableNote(x));
+        await add('unable_handoff', 'Handed to Eric: no better number from the attorney yet.', 'system', false, false);
+        acted++;
+      }
+      await coordWrite(cs, { stage: 'scheduling', waiting: 'attorney', next: askedAt && !(lastAt(t => t.kind === 'unable_handoff') >= askedAt) ? handDue : null, summary: C.summary.schedulingUnable(x) });
+    } else {
+      const touches = Number(cs.sched_touches || 0);
+      const acceptedMs = Date.parse(cs.accepted_at || cs.updated_at || cs.created_at);
+      const due = cs.sched_next_touch ? Date.parse(cs.sched_next_touch) : acceptedMs + 48 * 3600000;
+      if (touches >= COORD_MAX_TOUCHES) {
+        if (touches === COORD_MAX_TOUCHES && active && COORDINATOR_EMAILS_ENABLED && biz && due <= now) {
+          if (await coordClaim(cs, touches, { sched_touches: touches + 1, sched_next_touch: null })) {
+            await coordTask(cs, C.task.schedName(x), C.task.schedNote(x));
+            await add('sched_handoff', C.timeline.schedHandoff(x), 'mdconcierge', true, false);
+            acted++;
+          }
+        }
+        await coordWrite(cs, Number(cs.sched_touches || 0) > COORD_MAX_TOUCHES
+          ? { stage: 'scheduling', waiting: 'mdconcierge', next: null, summary: C.summary.schedulingEric(x) }
+          : { stage: 'scheduling', waiting: 'office', next: due, summary: C.summary.scheduling(x) });
+      } else {
+        let next = due;
+        if (active && biz && due <= now) {
+          const n = touches + 1;
+          const nextTouch = addBusinessDaysET(new Date(now), 2);
+          if (await coordClaim(cs, touches, { sched_touches: n, sched_next_touch: nextTouch.toISOString(), accept_token_exp: daysFromNow(ACCEPT_TTL_DAYS) })) {
+            await post('provider', 'scheduling', C.request.schedTouch(x, n));
+            await add(`sched_touch:${n}`, C.timeline.schedTouch(x, n));
+            // After the second note, if the office is still working on it, the attorney is asked kindly.
+            if (n === 2 && !openReq('attorney', 'client_contact')) {
+              await post('attorney', 'client_contact', C.request.attyContact(x));
+              await add('atty_contact_ask', C.timeline.attyContactAsk(x));
+            }
+            await logAudit(cs.id, 'coord_sched_touch', `touch ${n}`);
+            next = nextTouch.getTime(); acted++;
+          }
+        }
+        await coordWrite(cs, { stage: 'scheduling', waiting: 'office', next, summary: C.summary.scheduling(x) });
+      }
+    }
+  }
+
+  if (COORDINATOR_EMAILS_ENABLED && active) acted += await coordDoorbells(cs, x, tl, emailed, now);
+  return acted;
+}
+
+// The doorbell: every coordinator timeline step from the last 48 hours that has not had its email yet.
+// Keyed on the timeline row, so a send held by the courtesy gate is simply retried next cycle and a
+// step can never be emailed twice.
+async function coordDoorbells(cs, x, tl, emailed, now) {
+  const C = COORD_COPY.email;
+  let sent = 0;
+  const pending = tl.filter(t => (t.actor === 'mdconcierge' || (COORD_ATTY_UPDATES_ENABLED && (t.kind === 'accepted' || t.kind === 'visit_confirmed'))) && t.id && (now - Date.parse(t.at)) < 48 * 3600000 && !emailed.has(`tl:${t.id}`));
+  for (const t of pending) {
+    let to = [], subject = '', text = '', btns = [];
+    const officeLink = cs.accept_token ? 'https://mdconcierge.net/respond.html?t=' + cs.accept_token : '';
+    if (t.kind.startsWith('sched_touch:') || t.kind.startsWith('visit_touch:')) {
+      const n = Number(t.kind.split(':').pop()) || 1;
+      to = x.recipients;
+      if (t.kind.startsWith('sched_touch:')) {
+        subject = C.schedTouchSubject(x); text = C.schedTouch(x, n);
+        if (officeLink) btns.push({ label: C.btnScheduled, href: officeLink + '&a=scheduled', color: '#2ecc8a', text: '#06351f' },
+                                  { label: C.btnStillWorking, href: officeLink + '&a=pending', color: '#EEF4FC', text: '#14213D' },
+                                  { label: C.btnCantReach, href: officeLink + '&a=unable', color: '#EEF4FC', text: '#14213D' });
+      } else {
+        subject = C.visitTouchSubject(x); text = C.visitTouch(x, n);
+        if (officeLink) btns.push({ label: C.btnVisitSeen, href: officeLink + '&a=visit_seen', color: '#2ecc8a', text: '#06351f' },
+                                  { label: C.btnVisitMissed, href: officeLink + '&a=visit_missed', color: '#EEF4FC', text: '#14213D' });
+      }
+      if (officeLink) btns.push({ label: C.btnOpenReferral, href: officeLink + '&a=accept', color: '#08214C', text: '#ffffff' });
+    } else if (COORD_ATTY_UPDATES_ENABLED && (t.kind === 'accepted' || t.kind === 'visit_confirmed')) {
+      to = await resolveOwnerEmails(cs, 'attorney');
+      if (!x.attyFirst && cs.attorney_id) { try { x.attyFirst = ((await sbGet(`attorneys?select=first_name&id=eq.${cs.attorney_id}`))[0] || {}).first_name || ''; } catch (e) {} }
+      if (t.kind === 'accepted') { subject = C.attyAcceptedSubject(x); text = C.attyAccepted(x); }
+      else { subject = C.attyVisitSeenSubject(x); text = C.attyVisitSeen(x); }
+      const stok = await statusToken(cs);
+      btns.push({ label: C.btnOpenCase, href: 'https://mdconcierge.net/status.html?t=' + stok, color: '#08214C', text: '#ffffff' });
+    } else if (t.kind === 'atty_contact_ask' || t.kind === 'atty_unable_ask' || t.kind === 'atty_missed_note') {
+      to = await resolveOwnerEmails(cs, 'attorney');
+      if (!x.attyFirst && cs.attorney_id) { try { x.attyFirst = ((await sbGet(`attorneys?select=first_name&id=eq.${cs.attorney_id}`))[0] || {}).first_name || ''; } catch (e) {} }
+      if (t.kind === 'atty_contact_ask') { subject = C.attyContactSubject(x); text = C.attyContact(x); }
+      else if (t.kind === 'atty_unable_ask') { subject = C.attyUnableSubject(x); text = C.attyUnable(x); }
+      else { subject = C.attyMissedSubject(x); text = C.attyMissed(x); }
+      const stok = await statusToken(cs);
+      btns.push({ label: C.btnOpenCase, href: 'https://mdconcierge.net/status.html?t=' + stok, color: '#08214C', text: '#ffffff' },
+                mailtoBtn(C.btnBetterNumber, `${x.ref} scheduling`, coordTidy(`Hello,\n\nBest number or time to reach ${x.pt}: \n\n`)));
+    } else continue;
+    if (!to.length) continue;
+    subject = coordTidy(subject); text = coordTidy(text);
+    await sendMail(to.join(', '), subject, text, emailHtml(text, btns, caseFooter(cs.case_id)), { kind: 'nudge' });
+    await sbPost('audit_log', { case_id: cs.id, action: 'coord_email', detail: `tl:${t.id}`, source: 'automation' });
+    emailed.add(`tl:${t.id}`); sent++;
+    console.log(`  coordinator: emailed ${t.kind.split(':')[0]} for ${cs.case_id}`);
+  }
+  return sent;
 }
 
 // ── Phase E: email artifact requests to the holder (records/bills/narratives — tracking only, never the doc) ──
@@ -1218,7 +1658,8 @@ async function handleEvents() {
 async function notifyCaseRequests() {
   if (!SVC) return;
   let reqs = [];
-  try { reqs = await sbGet(`case_requests?select=*&notified_at=is.null&order=created_at.asc`); }
+  // MDconcierge's own requests (the case coordinator) ring their own doorbell and are never relayed here.
+  try { reqs = await sbGet(`case_requests?select=*&notified_at=is.null&from_role=neq.mdconcierge&order=created_at.asc`); }
   catch (e) { console.error('requests: query failed: ' + e.message); return; }
   let sent = 0;
   for (const rq of reqs) {
@@ -1270,6 +1711,24 @@ function stripQuote(body) {
   let idx = b.length;
   for (const re of cuts) { const m = b.match(re); if (m && m.index >= 0 && m.index < idx) idx = m.index; }
   return b.slice(0, idx).trim();
+}
+async function relayBetterNumber(cs, fromAddr, body) {
+  if (String(cs.schedule_status || '').toLowerCase() !== 'unable') return false;
+  const fromLc = String(fromAddr || '').toLowerCase();
+  const atty = (await resolveOwnerEmails(cs, 'attorney')).map(e => e.toLowerCase());
+  if (!atty.includes(fromLc)) return false;
+  if (!stripQuote(body)) return false;
+  await relayMessageReply(cs, fromAddr, body);   // "[ref] Message from the referring attorney's office" to the office
+  const patch = { schedule_status: 'pending', unreachable_relayed: false, sched_next_touch: addBusinessDaysET(new Date(), 2).toISOString() };
+  if (String(cs.status || '').toLowerCase() === 'escalated') patch.status = 'routed';
+  await sbPatch(`cases?id=eq.${cs.id}`, patch);
+  try {
+    await sbPatch(`case_requests?case_id=eq.${cs.id}&from_role=eq.mdconcierge&to_role=eq.attorney&status=eq.open`, { status: 'answered' });
+    await coordTimeline(cs.id, 'attorney', 'attorney_answer', `The attorney's office shared an update for the office about ${coordPatient(cs)}.`);
+  } catch (e) { console.error(`  better-number timeline ${cs.id} failed: ${e.message}`); }
+  await logAudit(cs.id, 'better_number_relayed', 'attorney reply relayed to office; scheduling reopened');
+  console.log(`  ${cs.case_id}: attorney's reply relayed to the office, scheduling reopened`);
+  return true;
 }
 async function relayMessageReply(cs, fromAddr, body) {
   const fromLc = (fromAddr || '').toLowerCase();
@@ -1982,6 +2441,40 @@ Puede responder a este correo para agregar detalles o para pedirnos que no lo co
 El equipo de InjuredGuide`,
   },
 };
+// ── Attorney referrals submitted on mdconcierge.net/refer.html ──
+// Same acknowledgment an emailed referral gets (draftReply, same buttons, same portal link), plus
+// Eric's push notice. The form files them as status 'review' for Eric to route.
+async function ackWebReferrals() {
+  if (!SVC) return;
+  let cases = [];
+  try { cases = await sbGet(`cases?select=*&lead_source=eq.attorney_referral&web_lead_notified=is.false&order=id.asc&limit=20`); }
+  catch (e) { console.error('web referrals: query failed: ' + e.message); return; }
+  for (const cs of cases) {
+    try {
+      const notes = String(cs.notes || '');
+      const field = (label) => { const m = notes.match(new RegExp(label + ':\\s*([^|]+)')); return m ? m[1].trim() : ''; };
+      const to = (resolveOwnerEmails ? await resolveOwnerEmails(cs, 'attorney') : [])[0] || '';
+      // Claim the row first, so a crash mid-send can never acknowledge twice.
+      await sbPatch(`cases?id=eq.${cs.id}`, { web_lead_notified: true });
+      const pn = [cs.patient_first, cs.patient_last].filter(Boolean).join(' ') || cs.case_id;
+      await pushNotify('New referral (web form)', `${pn} — ${(cs.case_type || 'new case').toUpperCase()} (${cs.case_id})`);
+      if (!to || isOwnAddress(to)) continue;
+      const contact = field('Referring contact').replace(/\s*\(.*\)$/, '');
+      const d = { referring_contact: contact, referring_firm: field('Referring firm'), missing: '' };
+      const replyText = await draftReply(d, cs, to);
+      const stok = await statusToken(cs);
+      const btns = [statusBtn(stok),
+        { label: '✏️ Add case details yourself', href: 'https://mdconcierge.net/status.html?t=' + stok, color: '#08214C', text: '#ffffff' },
+        mailtoBtn('Reply to coordinate', `Referral ${cs.case_id}`, `Hello,\n\nRegarding ${pn} (${cs.case_id}):\n\n`)];
+      const pLink = await ensurePortalLink('attorney', cs.attorney_id || null, to, contact);
+      if (pLink) btns.push({ label: '🔐 Set up portal access', href: pLink, color: '#EEF4FC', text: '#14213D' });
+      await sendMail(to, `Referral received (${cs.case_id})`, replyText, emailHtml(replyText, btns, caseFooter(cs.case_id)), { kind: 'event', critical: true });
+      await logAudit(cs.id, 'web_referral_acked', null);
+      console.log(`  acknowledged web referral ${cs.case_id}`);
+    } catch (e) { console.error(`  web referral ${cs.id} failed: ${e.message}`); }
+  }
+}
+
 async function notifyWebLeads() {
   if (!SVC) return;
   let leads = [];
@@ -2158,6 +2651,10 @@ async function main() {
                 console.log(`  ${kc.case_id}: filled from reply → ${Object.keys(patch).filter(k => k !== 'provider_update_pending').join(', ')}`);
               } else console.log(`  ${kc.case_id}: reply had no new extractable info.`);
             } catch (e) { console.error(`  reply info-extract failed for ${kc.case_id}: ${e.message}`); }
+            // The office could not reach the patient and the attorney's office has written back (usually
+            // with a better number): pass it straight to the office and give scheduling another go.
+            // Before 28 Sep 2026 this reply was filed and never reached the office.
+            try { await relayBetterNumber(kc, fromAddr, body); } catch (e) { console.error(`  better-number relay failed for ${kc.case_id}: ${e.message}`); }
             if (docs.length) { try { const res = await forwardDocuments(kc, fromAddr, subject, body, docs); if (res && res.forwarded) console.log(`  forwarded ${docs.length} doc(s) for ${kc.case_id} -> ${res.role}.`); } catch (e) { console.error(`  doc forward failed for ${kc.case_id}: ${e.message}`); } }
             await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
             continue;
@@ -2252,6 +2749,7 @@ async function main() {
   await client.logout();
   await scanEricInbox();   // also catch referrals sent to eric@ by mistake
   await notifyWebLeads();  // every InjuredGuide web lead goes to Eric the moment it lands
+  await ackWebReferrals(); // attorney referrals from the refer.html form: acknowledge the attorney
   await confirmNetworkRequests();          // ack the referrer "received, placing it"
   await announceInNetworkReferrals();
   await notifyRoutedProviders();
@@ -2263,7 +2761,7 @@ async function main() {
   await confirmNetworkRequestScheduled();  // confirm to a provider referrer once scheduled (+ who's treating)
   await relayTreatingProvider();
   await escalateUnreachable();
-  await chaseScheduling();
+  await coordinateCases();   // the case coordinator: stage, timeline and next step for every open case
   await emailArtifactRequests();
   await handleEvents();
   await notifyCaseRequests();
