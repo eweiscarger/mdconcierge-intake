@@ -104,7 +104,13 @@ async function bookProposedTime(prov, local, name, email) {
 // { sentiment: 'workable'|'decline'|'optout', hot: bool, draft: string }.
 // Exported so a backfill can redraft replies that were read while the model was down, using the
 // one prompt that already exists rather than a second copy of it that would drift from this one.
+const CALENDAR_REPLY_RE = /^\s*(accepted|declined|tentative|tentatively accepted|updated invitation|invitation|canceled|cancelled)(\s+event)?\s*:/i;
 export async function analyzeAndDraft(who, fromAddr, subject, body, isTeam) {
+  // A calendar response to Eric's invite. Nothing to draft; a decline or cancellation is worth his eye.
+  if (CALENDAR_REPLY_RE.test(String(subject || ''))) {
+    const bad = /^\s*(declined|canceled|cancelled)/i.test(String(subject || ''));
+    return { sentiment: 'workable', hot: bad, intent: null, draft: '', proposedTime: '' };
+  }
   const sys = `You are Eric Weiscarger's inbox agent for MDconcierge. Eric partners WITH the MDRx360 team to bring physicians into the MDRx Workers' Compensation Pharmacy Program.
 
 WHO IS WHO (get this right):
@@ -190,6 +196,7 @@ Return ONLY: {"sentiment":"...","hot":true|false,"intent":"interested"|"ready"|"
     return { sentiment: s, hot: !!o.hot || !!intent, intent, draft: (o.draft || '').trim(), proposedTime: String(o.proposed_time || '').trim() };
   } catch (e) {
     console.error('analyze failed: ' + e.message);
+    aiFailureReasons.push({ kind: /credit|balance|billing|401|403|429|overloaded|rate/i.test(String(e.message)) ? 'api' : 'unreadable', what: `${who || fromAddr}: ${String(subject || '(no subject)').slice(0, 80)}` });
     // Counted, so the end of the run can say so and alert. The safe default below is still right:
     // it must never auto-suppress or auto-route on a failure. What was wrong was staying silent
     // about it, which let a physician's "How about 10:00EST?" pass through as an empty string.
@@ -208,6 +215,7 @@ Return ONLY: {"sentiment":"...","hot":true|false,"intent":"interested"|"ready"|"
 // Declared here rather than at the top only because the anchors above are inside a function; it is
 // still initialised before main() runs, which is what matters. See the TDZ outage of 17-23 Sep.
 let aiFailures = 0;
+const aiFailureReasons = [];
 
 async function main() {
   // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
@@ -470,8 +478,11 @@ async function main() {
   // reply it touched got no draft, no sentiment, no hot flag and no proposed time, which means a
   // physician who named a time was heard as silence. Say it loudly and tell Eric.
   if (aiFailures) {
-    const msg = `${aiFailures} message(s) were read but never analysed, so they carry no draft reply and no proposed time. `
-      + `Anything a physician asked for in them has been missed. The usual cause is the Anthropic API key being out of credit.`;
+    const api = aiFailureReasons.some(r => r.kind === 'api');
+    const msg = `${aiFailures} email(s) came in that the assistant could not read, so they have no draft reply. Open them in the inbox and answer by hand:\n`
+      + aiFailureReasons.map(r => `  - ${r.what}`).join('\n') + '\n'
+      + (api ? `The AI service refused the request, which usually means the Anthropic API account is out of credit.`
+             : `The AI answered but not in a form the script could use. This is not a credit problem.`);
     console.error(`MDRx inbox scan: AI DEGRADED. ${msg}`);
     await alertFailure('mdrx-inbox-ai', msg);
   }
