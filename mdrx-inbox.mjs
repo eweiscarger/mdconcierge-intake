@@ -183,9 +183,15 @@ Return ONLY: {"sentiment":"...","hot":true|false,"intent":"interested"|"ready"|"
   const todayISO = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).toISOString().slice(0, 10);
   const user = `TODAY is ${today} (${todayISO}), Eastern time. This email is from ${who} <${fromAddr}>${isTeam ? ' (an MDRx360 TEAMMATE, not a prospect)' : ''}. Subject: "${subject}".\n\nFull thread (most recent on top):\n"""\n${String(body || '').slice(0, 4500)}\n"""`;
   try {
-    const m = await anthropic.messages.create({ model: 'claude-sonnet-5', max_tokens: 650, system: sys, messages: [{ role: 'user', content: user }] });
+    // Eric, 30 Sep 2026: five real replies came in and none got a draft, with
+    // "analyze failed: Unexpected end of JSON input" five times. 650 tokens is not enough: the
+    // model spends the budget thinking and the JSON is cut off mid-object, so JSON.parse throws
+    // and the reply is lost. next-move.mjs hit exactly this and settled on 8000 for the same
+    // reason. Matching it.
+    const m = await anthropic.messages.create({ model: 'claude-sonnet-5', max_tokens: 8000, system: sys, messages: [{ role: 'user', content: user }] });
     const raw = (m.content?.[0]?.text || '').trim();
     const json = raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+    if (!json) throw new Error(`model returned no JSON object (stop=${m.stop_reason}, out=${m.usage?.output_tokens})`);
     const o = JSON.parse(json);
     let s = String(o.sentiment || '').toLowerCase();
     if (!['workable', 'decline', 'optout'].includes(s)) s = 'workable'; // parse safety: leave for human, never auto-suppress on doubt
