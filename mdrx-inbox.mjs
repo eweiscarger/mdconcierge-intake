@@ -17,7 +17,14 @@ import { transporter } from './mailer.mjs';
 const ERIC_USER = process.env.ERIC_USER || 'eric@mdconcierge.net';
 const ERIC_PASS = process.env.MDRX_ERIC_PASS || process.env.ERIC_APP_PASSWORD;
 const { ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
-for (const [k, v] of Object.entries({ ERIC_PASS, ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
+// Only what ANY consumer of this file needs. ERIC_PASS is the mailbox password and is checked
+// inside main(), where the IMAP connection actually happens.
+//
+// Eric, 30 Sep 2026: this loop used to demand ERIC_PASS here, at module scope. That runs before
+// the isMain guard, so `import { analyzeAndDraft }` killed the process with "Missing env var:
+// ERIC_PASS" on a machine that has no mailbox password, which is every machine except the
+// runner. Exporting the function was pointless while this stood in front of it.
+for (const [k, v] of Object.entries({ ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) { console.error('Missing env var: ' + k); process.exit(1); }
 }
 
@@ -224,6 +231,8 @@ let aiFailures = 0;
 const aiFailureReasons = [];
 
 async function main() {
+  // The mailbox password is needed from here down, and only from here down.
+  if (!ERIC_PASS) { console.error('Missing env var: ERIC_PASS'); process.exit(1); }
   // One reply agent for ALL leads (mdrx + funnel). funnel-reply.mjs was merged in here.
   const provs = await sGet('mdrx_providers?select=id,first_name,last_name,email,funnel_stage,suppressed,engaged_at,lead_type,cell,office_phone,funnel_token,practice_id,practice_name');
   const existing = await sGet('mdrx_inbox_drafts?select=message_uid');
