@@ -1540,6 +1540,81 @@ async function coordinateOne(cs, tl, openReqs, emailed, now, biz) {
   return acted;
 }
 
+// ── Eric's own updates, emailed to everyone on the case ──
+// Eric, 1 Oct 2026: "i need to be involved in the timeline just like the providers ... when i make
+// updates, all parties involved need to be notified via email and in the portal." He logs an update on
+// the dashboard (admin-v2 cvLogUpdate): kind 'eric_update' goes on the timeline both sides see and is
+// emailed here, in his own words, to each side it is shared with. The dashboard's "Ask the office" and
+// "Ask the attorney" buttons (update_requested / number_requested) are delivered here too; they used to
+// promise an email that nothing sent. Keyed on the timeline row, so nothing is emailed twice.
+const GREETING_RE = /^\s*(hi|hello|hey|dear|good (morning|afternoon|evening)|team)\b/i;
+async function sendEricUpdates() {
+  if (!SVC) return;
+  let rows = [], emailed = new Set();
+  try {
+    const since = new Date(Date.now() - 48 * 3600000).toISOString();
+    rows = await sbGet(`case_timeline?select=*&kind=in.(eric_update,update_requested,number_requested)&at=gte.${since}&order=at.asc`);
+    if (!rows.length) return;
+    emailed = new Set((await sbGet(`audit_log?select=detail&action=eq.coord_email&created_at=gte.${new Date(Date.now() - 4 * 86400000).toISOString()}`)).map(r => r.detail));
+  } catch (e) { console.error('eric updates: query failed: ' + e.message); return; }
+  for (const t of rows) {
+    if (emailed.has(`tl:${t.id}`)) continue;
+    try {
+      const cs = (await sbGet(`cases?select=*&id=eq.${t.case_id}`))[0];
+      if (!cs) continue;
+      const pt = coordPatient(cs), ref = cs.case_id || '';
+      const officeLink = cs.accept_token ? 'https://mdconcierge.net/respond.html?t=' + cs.accept_token : '';
+      const attyFirst = async () => { if (!cs.attorney_id) return ''; try { return ((await sbGet(`attorneys?select=first_name&id=eq.${cs.attorney_id}`))[0] || {}).first_name || ''; } catch (e) { return ''; } };
+      const sends = [];   // { to: [], subject, text, btns }
+      const toAtty = async (subject, body, extraBtn) => {
+        const to = await resolveOwnerEmails(cs, 'attorney'); if (!to.length) return;
+        const first = await attyFirst();
+        const text = GREETING_RE.test(body) ? body : `Hi${first ? ' ' + first : ''},\n\n${body}`;
+        const btns = [{ label: 'Open the case page', href: 'https://mdconcierge.net/status.html?t=' + await statusToken(cs), color: '#08214C', text: '#ffffff' }];
+        if (extraBtn) btns.push(extraBtn);
+        sends.push({ to, subject, text, btns });
+      };
+      const toOffice = async (subject, body, schedBtns) => {
+        if (!cs.routed_provider_id && !cs.routed_practice_id) return;
+        const { recipients } = await coordOffice(cs); if (!recipients.length) return;
+        const text = GREETING_RE.test(body) ? body : `Hi,\n\n${body}`;
+        const btns = [];
+        if (officeLink && schedBtns) btns.push({ label: 'Scheduled', href: officeLink + '&a=scheduled', color: '#2ecc8a', text: '#06351f' },
+          { label: 'Still working on it', href: officeLink + '&a=pending', color: '#EEF4FC', text: '#14213D' },
+          { label: "Can't reach patient", href: officeLink + '&a=unable', color: '#EEF4FC', text: '#14213D' });
+        if (officeLink) btns.push({ label: 'Open the referral page', href: officeLink + '&a=accept', color: '#08214C', text: '#ffffff' });
+        sends.push({ to: recipients, subject, text, btns });
+      };
+      const openReq = async (role) => { try { return ((await sbGet(`case_requests?select=message&case_id=eq.${cs.id}&from_role=eq.mdconcierge&to_role=eq.${role}&status=eq.open&order=created_at.desc&limit=1`))[0] || {}).message || ''; } catch (e) { return ''; } };
+
+      if (t.kind === 'eric_update') {
+        const subject = `Update on ${pt} (${ref})`;
+        if (t.for_attorney) await toAtty(subject, t.text);
+        if (t.for_office) await toOffice(subject, t.text, false);
+      } else if (t.kind === 'update_requested') {
+        await toOffice(`A quick question about ${pt} (${ref})`, (await openReq('provider')) || t.text, true);
+      } else if (t.kind === 'number_requested') {
+        await toAtty(`Reaching ${pt} (${ref})`, (await openReq('attorney')) || t.text,
+          mailtoBtn('Reply with a better number', `${ref} scheduling`, coordTidy(`Hello,\n\nBest number or time to reach ${pt}: \n\n`)));
+      }
+      for (const m of sends) await sendMail(m.to.join(', '), coordTidy(m.subject), m.text, emailHtml(m.text, m.btns, caseFooter(ref)), { kind: 'event', critical: true });
+      // Mark it handled even when there was nobody to email, so it is not retried for 48 hours.
+      await sbPost('audit_log', { case_id: cs.id, action: 'coord_email', detail: `tl:${t.id}`, source: 'automation' });
+      // Eric's update IS the notice: the automatic lines he saved alongside it (a visit he confirmed,
+      // a missed visit) must not send a second email on top of his.
+      if (t.kind === 'eric_update' && sends.length) {
+        try {
+          const lo = new Date(Date.parse(t.at) - 180000).toISOString(), hi = new Date(Date.parse(t.at) + 180000).toISOString();
+          const sib = await sbGet(`case_timeline?select=id&case_id=eq.${cs.id}&id=neq.${t.id}&at=gte.${lo}&at=lte.${hi}`);
+          for (const x of sib) if (!emailed.has(`tl:${x.id}`)) await sbPost('audit_log', { case_id: cs.id, action: 'coord_email', detail: `tl:${x.id}`, source: 'automation' });
+        } catch (e) {}
+      }
+      await logAudit(cs.id, 'eric_update_sent', `${t.kind} to ${sends.length} party(ies)`);
+      console.log(`  ${t.kind} on ${ref} emailed to ${sends.length} party(ies)`);
+    } catch (e) { console.error(`  eric update ${t.id} failed: ${e.message}`); }
+  }
+}
+
 // The doorbell: every coordinator timeline step from the last 48 hours that has not had its email yet.
 // Keyed on the timeline row, so a send held by the courtesy gate is simply retried next cycle and a
 // step can never be emailed twice.
@@ -2761,6 +2836,7 @@ async function main() {
   await confirmNetworkRequestScheduled();  // confirm to a provider referrer once scheduled (+ who's treating)
   await relayTreatingProvider();
   await escalateUnreachable();
+  await sendEricUpdates();   // Eric's own updates (and his Ask buttons), emailed to the parties on the case
   await coordinateCases();   // the case coordinator: stage, timeline and next step for every open case
   await emailArtifactRequests();
   await handleEvents();
